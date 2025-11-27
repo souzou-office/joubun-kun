@@ -306,11 +306,12 @@ export default function App() {
       
       console.log('✅ Embeddingモデル初期化完了');
 
-      // 2. 法令インデックス読み込み
+      // 2. 法令インデックス読み込み（R2から）
       setModelStatus('📚 法令インデックスを読み込み中...');
       
       try {
-        const indexResponse = await fetch('data/laws_index.json');
+        const R2_BASE_URL = 'https://pub-31e9c70796b94125976e0d215b8de3b1.r2.dev';
+        const indexResponse = await fetch(`${R2_BASE_URL}/laws_index.json`);
         const index = await indexResponse.json();
         setLawsIndex(index);
         console.log(`✅ ${index.total_laws}法令のインデックス読み込み完了`);

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.local
+
+# データファイル（R2から読み込むため不要）
+public/data/
+.wrangler/

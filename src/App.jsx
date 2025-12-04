@@ -128,6 +128,40 @@ const saveToIndexedDB = async (chunkId, data) => {
 
 // APIキー管理
 const API_KEY_STORAGE = 'joubun_claude_api_key';
+const PRO_MODE_STORAGE = 'joubun_pro_mode';
+
+// プロモード管理
+const saveProMode = (enabled) => {
+  localStorage.setItem(PRO_MODE_STORAGE, enabled ? 'true' : 'false');
+};
+
+const getProMode = () => {
+  return localStorage.getItem(PRO_MODE_STORAGE) === 'true';
+};
+
+// トークン制限
+const TOKEN_LIMIT = 200000;
+
+// トークン数推定（日本語は1文字≒2-3トークン、英語は1単語≒1トークン）
+const estimateTokens = (text) => {
+  if (!text) return 0;
+  // 日本語文字数
+  const japaneseChars = (text.match(/[\u3000-\u9fff\uff00-\uffef]/g) || []).length;
+  // その他（英数字など）
+  const otherChars = text.length - japaneseChars;
+  // 日本語は2トークン/文字、英数字は0.25トークン/文字として概算
+  return Math.ceil(japaneseChars * 2 + otherChars * 0.25);
+};
+
+// 会話履歴のトークン数を計算
+const calculateConversationTokens = (conversations) => {
+  let total = 0;
+  for (const conv of conversations) {
+    total += estimateTokens(conv.question);
+    total += estimateTokens(conv.answer);
+  }
+  return total;
+};
 
 const saveApiKey = (key) => {
   localStorage.setItem(API_KEY_STORAGE, key);
@@ -142,33 +176,34 @@ const deleteApiKey = () => {
 };
 
 // AI解説テキストを見やすくフォーマット
-const formatExplanation = (text) => {
+const formatExplanation = (text, onArticleClick) => {
   let cleanText = text
     .replace(/^#{4,6}\s+/gm, '    ')
     .replace(/^###\s+/gm, '   ')
     .replace(/^##\s+/gm, '  ')
     .replace(/^#\s+/gm, ' ')
     .trim();
-  
+
   const paragraphs = cleanText.split('\n').filter(p => p.trim());
-  
+
   return paragraphs.map((paragraph, index) => {
     let content = paragraph;
-    
-    // 太字を強調
-    content = content.replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>');
-    content = content.replace(/\*(.*?)\*/g, '<em class="italic">$1</em>');
-    
-    // 条文番号を目立たせる
+
+    // 太字を強調（より目立つスタイル）
+    content = content.replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-gray-900 bg-gray-100 px-1 rounded">$1</strong>');
+    content = content.replace(/\*(.*?)\*/g, '<em class="italic text-gray-700">$1</em>');
+
+    // 条文番号をクリッカブルなボタンに（data属性で条文情報を持たせる）
+    // 【民法 第557条】や【民法第557条】両方対応
     content = content.replace(
-      /(【[^】]+第[0-9]+条[^】]*】)/g, 
-      '<span class="inline-block font-bold text-blue-700 bg-blue-100 px-3 py-1 rounded-lg border-2 border-blue-300 mx-1 shadow-sm">$1</span>'
+      /【([^】第]+?)\s*(第[一二三四五六七八九十百千0-9]+条[^】]*)】/g,
+      '<button class="article-link inline-block font-bold text-blue-700 bg-blue-100 px-3 py-1 rounded-lg border-2 border-blue-300 mx-1 shadow-sm hover:bg-blue-200 hover:border-blue-400 cursor-pointer transition-colors" data-law="$1" data-article="$2">【$1$2】</button>'
     );
-    
-    // 重要キーワードを強調
+
+    // 重要キーワードを強調（より多くのキーワード対応）
     content = content.replace(
-      /(?:^|\s)(手付|解除|履行の着手|契約|債務|債権|損害賠償|設立|株式|株主|登記|要件|効果|原則|例外|注意点|できる|できない|できません|してはならない|しなければならない|必要|可能|不可|禁止|違反)(?=\s|$|、|。|は|が|を|に|です)/g, 
-      ' <span class="font-semibold text-gray-900 bg-yellow-100 px-1.5 py-0.5 rounded">$1</span>'
+      /(?:^|\s)(手付|解除|履行の着手|契約|債務|債権|損害賠償|設立|株式|株主|登記|届出|届け出|申請|要件|効果|原則|例外|注意点|できる|できない|できません|してはならない|しなければならない|必要|可能|不可|禁止|違反|義務|権利|責任|期限|期間)(?=\s|$|、|。|は|が|を|に|です)/g,
+      ' <span class="font-bold text-gray-900 bg-yellow-100 px-1 py-0.5 rounded border-b-2 border-yellow-400">$1</span>'
     );
     
     // 番号付きリスト
@@ -218,17 +253,24 @@ const formatExplanation = (text) => {
     }
     
     // 重要な結論・制約
-    const isImportantConclusion = 
+    const isImportantConclusion =
       /^(したがって|よって|つまり|結論として|以上より|重要|注意)、?/.test(paragraph) ||
       /(できません|禁止|してはならない|必ず|不可|違反)/.test(paragraph) ||
       paragraph.includes('履行の着手');
-    
+
     if (isImportantConclusion) {
+      // 黄色カード内では条文リンクを黄色系に変更
+      const yellowContent = content
+        .replace(/text-blue-700/g, 'text-amber-800')
+        .replace(/bg-blue-100/g, 'bg-amber-100')
+        .replace(/border-blue-300/g, 'border-amber-400')
+        .replace(/hover:bg-blue-200/g, 'hover:bg-amber-200')
+        .replace(/hover:border-blue-400/g, 'hover:border-amber-500');
       return (
         <div key={index} className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-5 my-5">
           <div className="flex items-start gap-3">
             <span className="text-2xl">⚠️</span>
-            <p className="text-gray-900 leading-7 font-semibold text-base flex-1" dangerouslySetInnerHTML={{ __html: content }} />
+            <p className="text-gray-900 leading-7 font-semibold text-base flex-1" dangerouslySetInnerHTML={{ __html: yellowContent }} />
           </div>
         </div>
       );
@@ -254,6 +296,9 @@ export default function App() {
   const [lawsIndex, setLawsIndex] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [tokenCount, setTokenCount] = useState(0);
+  const [isTokenLimitReached, setIsTokenLimitReached] = useState(false);
+  const [proMode, setProMode] = useState(false);
 
   // 最新の会話へのスクロール用ref
   const latestConversationRef = useRef(null);
@@ -278,6 +323,7 @@ export default function App() {
   // ===== 初期化 =====
   useEffect(() => {
     checkApiKey();
+    checkProMode();
     initialize();
   }, []);
 
@@ -288,9 +334,120 @@ export default function App() {
     }
   }, [conversations]);
 
+  // ===== 条文リンクのクリックイベント（ネイティブイベントリスナー）=====
+  useEffect(() => {
+    const handleArticleLinkClick = (e) => {
+      const target = e.target.closest('.article-link');
+      if (!target) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const lawName = target.dataset.law;
+      const articleNum = target.dataset.article;
+      console.log('🔗 条文クリック:', lawName, articleNum);
+
+      // 該当する会話のIDを取得（親要素から探す）
+      const conversationDiv = target.closest('[data-explanation-conv-id]');
+      const convId = conversationDiv?.dataset.explanationConvId;
+      console.log('会話ID:', convId);
+
+      // 右側の条文エリアで該当条文を探す
+      const selector = convId
+        ? `[data-conv-id="${convId}"] .article-card`
+        : '.article-card';
+      const articleElements = document.querySelectorAll(selector);
+      console.log('条文カード数:', articleElements.length);
+
+      // articleNumから条文番号を抽出（「第209条の2」→「209」「の2」または「十九」「の二」）
+      // 枝番号（の二、の三など）も含めて抽出
+      const articleMatchResult = articleNum.match(/第([一二三四五六七八九十百千0-9]+)条(の[一二三四五六七八九十0-9]+)?/);
+      const articleNumber = articleMatchResult ? articleMatchResult[1] : articleNum;
+      const articleSuffix = articleMatchResult ? (articleMatchResult[2] || '') : '';
+
+      // アラビア数字→漢数字変換（カード内は漢数字で表記されている）
+      let articleNumberKanji = articleNumber;
+      if (/^[0-9]+$/.test(articleNumber)) {
+        articleNumberKanji = toKanjiNumber(parseInt(articleNumber, 10));
+      }
+
+      // 枝番号もアラビア数字→漢数字変換
+      let articleSuffixKanji = articleSuffix;
+      const suffixMatch = articleSuffix.match(/の([0-9]+)/);
+      if (suffixMatch) {
+        articleSuffixKanji = 'の' + toKanjiNumber(parseInt(suffixMatch[1], 10));
+      }
+
+      const fullArticlePattern = `第${articleNumberKanji}条${articleSuffixKanji}`;
+      console.log('抽出した条文番号:', articleNumber + articleSuffix, '→ 検索パターン:', fullArticlePattern);
+
+      let found = false;
+      for (const el of articleElements) {
+        const text = el.textContent;
+
+        // 法令名チェック
+        const lawMatched = text.includes(lawName);
+        // 条文番号チェック（漢数字で検索、枝番号含む）
+        const articleMatched = text.includes(fullArticlePattern);
+
+        if (lawMatched && articleMatched) {
+          console.log('✅ マッチ！スクロールします');
+          found = true;
+
+          // 親のスクロールコンテナを取得
+          const scrollContainer = el.closest('.overflow-y-auto');
+          if (scrollContainer) {
+            // コンテナ内でのスクロール位置を計算（上部に少し余白を持たせる）
+            const containerRect = scrollContainer.getBoundingClientRect();
+            const elementRect = el.getBoundingClientRect();
+            const offsetTop = elementRect.top - containerRect.top + scrollContainer.scrollTop;
+            const topPadding = 10; // 上部に10pxの余白
+
+            scrollContainer.scrollTo({
+              top: offsetTop - topPadding,
+              behavior: 'smooth'
+            });
+          } else {
+            // フォールバック
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+
+          el.classList.add('ring-4', 'ring-yellow-400');
+          setTimeout(() => el.classList.remove('ring-4', 'ring-yellow-400'), 2000);
+          break; // 最初のマッチで終了
+        }
+      }
+
+      if (!found) {
+        console.log('❌ マッチする条文が見つかりませんでした');
+        console.log('検索条件: 法令名=' + lawName + ', 条文番号=' + fullArticlePattern);
+      }
+    };
+
+    // ドキュメント全体にイベントリスナーを追加
+    document.addEventListener('click', handleArticleLinkClick);
+
+    return () => {
+      document.removeEventListener('click', handleArticleLinkClick);
+    };
+  }, []);
+
+  // ===== トークン数を監視 =====
+  useEffect(() => {
+    const tokens = calculateConversationTokens(conversations);
+    setTokenCount(tokens);
+    if (tokens >= TOKEN_LIMIT) {
+      setIsTokenLimitReached(true);
+    }
+  }, [conversations]);
+
   const checkApiKey = () => {
     const key = getApiKey();
     setHasApiKey(key.length > 0);
+  };
+
+  const checkProMode = () => {
+    setProMode(getProMode());
   };
 
   const initialize = async () => {
@@ -359,6 +516,70 @@ export default function App() {
 
     const data = await response.json();
     return data.content[0].text;
+  };
+
+  // ===== クエリ適正化（並列検索用）=====
+  const optimizeQuery = async (originalQuery, conversationHistory = []) => {
+    const apiKey = getApiKey();
+    if (!apiKey) return null;
+
+    // 直近の会話履歴を文脈として追加（最大2件）
+    let contextText = '';
+    if (conversationHistory.length > 0) {
+      const recentConvs = conversationHistory.slice(-2);
+      contextText = '\n【直近の会話履歴】\n';
+      recentConvs.forEach(conv => {
+        contextText += `Q: ${conv.question}\n`;
+        // 回答は長いので最初の200文字だけ
+        const shortAnswer = conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer;
+        contextText += `A: ${shortAnswer}\n\n`;
+      });
+    }
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 200,
+          messages: [{
+            role: 'user',
+            content: `以下のユーザーの質問を、法令検索に適した文章に書き換えてください。
+${contextText}
+【ユーザーの質問】
+${originalQuery}
+
+【ルール】
+- 「もう少し詳しく」「具体例は？」などの追加質問の場合、会話履歴から文脈を読み取り、具体的な検索クエリに変換する
+- 口語表現や概念的な表現を、法令条文で実際に使われている用語に変換する
+- 例：「届け出る」→「届出」、「財源規制」→「分配可能額」「剰余金」
+- 条文番号（第○条）は含めない
+- 法令名が特定できる場合はそのまま残す
+- 必要な法律用語は省略せず全て含める
+- 自然な文章として出力する
+
+【出力】
+書き換えた文章のみを出力してください。説明は不要です。`
+          }]
+        })
+      });
+
+      if (!response.ok) return null;
+      const data = await response.json();
+      const optimized = data.content[0].text.trim();
+      console.log('🔄 適正化クエリ:', optimized);
+
+      return optimized;
+    } catch (err) {
+      console.error('⚠️ クエリ適正化エラー:', err);
+      return null;
+    }
   };
 
   // ===== chunkファイル読み込み（IndexedDB対応）=====
@@ -430,29 +651,109 @@ export default function App() {
     return idf * ((tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * (docLength / avgDocLength))));
   };
 
+  // ===== 複数クエリで同時検索（1回のchunk読み込みで両方処理）=====
+  const searchWithDualEmbeddings = async (originalEmbedding, optimizedEmbedding, lawName, articleNumbersKanji) => {
+    const EXACT_MATCH_BONUS = 0.50;
+    const LAW_NAME_MATCH_BONUS = 0.15;
+    const TOP_N = 20;
+
+    const dataChunks = lawsIndex.chunks.filter(c => c.filename.startsWith('laws_chunk_'));
+
+    // 両方の結果を保持するMap（キー: law_id-article_title）
+    const scoreMap = new Map();
+
+    for (const chunk of dataChunks) {
+      const chunkData = await loadLawChunk(chunk.filename);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      for (const [lawId, lawData] of Object.entries(chunkData.laws)) {
+        if (!lawData.articles) continue;
+
+        for (const article of lawData.articles) {
+          if (!article.embedding || !Array.isArray(article.embedding)) continue;
+
+          const key = `${lawId}-${article.title}`;
+
+          // 元クエリのスコア計算
+          const originalSimilarity = cosineSimilarity(originalEmbedding, article.embedding);
+
+          let bonus = 0;
+          let matchType = '';
+          const lawNameMatched = lawName && lawData.law_title && lawData.law_title === lawName;
+          const articleTitleKanji = extractArticleNumberFromTitle(article.title);
+          const articleNumberMatched = articleNumbersKanji.length > 0 && articleTitleKanji && articleNumbersKanji.includes(articleTitleKanji);
+
+          if (lawNameMatched && articleNumberMatched) {
+            bonus = EXACT_MATCH_BONUS;
+            matchType = '🎯完全一致';
+          } else if (lawNameMatched) {
+            bonus = LAW_NAME_MATCH_BONUS;
+            matchType = '📘法令名一致';
+          }
+
+          const originalScore = originalSimilarity + bonus;
+
+          // 適正化クエリのスコア計算（あれば）
+          let optimizedScore = 0;
+          let sources = ['元クエリ'];
+
+          if (optimizedEmbedding) {
+            const optimizedSimilarity = cosineSimilarity(optimizedEmbedding, article.embedding);
+            optimizedScore = optimizedSimilarity; // 適正化はボーナスなし
+            sources.push('適正化');
+          }
+
+          const totalScore = originalScore + optimizedScore;
+
+          // Mapに追加または更新
+          if (!scoreMap.has(key) || scoreMap.get(key).score < totalScore) {
+            scoreMap.set(key, {
+              law: { law_title: lawData.law_title, law_id: lawId },
+              article: {
+                title: article.title,
+                content: article.content,
+                caption: article.caption,
+                paragraphs: article.paragraphs
+              },
+              similarity: Math.round(originalSimilarity * 1000) / 1000,
+              score: Math.round(totalScore * 1000) / 1000,
+              matchType: matchType,
+              sources: optimizedEmbedding ? sources : ['元クエリ']
+            });
+          }
+        }
+      }
+    }
+
+    // スコア順でソートしてTop N
+    const top20 = Array.from(scoreMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, TOP_N);
+
+    return top20;
+  };
+
   // ===== 検索処理 =====
   const handleSearch = async (searchQuery = null, options = {}) => {
-    // searchQueryがイベントオブジェクトの場合は無視
     const actualQuery = (typeof searchQuery === 'string') ? searchQuery : query;
     const { disableBonus = false } = options;
-    
+
     if (!actualQuery.trim() || !lawsIndex || modelLoading) return;
-    
+
     if (!hasApiKey) {
       setError('APIキーが設定されていません。設定画面から入力してください。');
       setShowSettings(true);
       return;
     }
-    
+
     setLoading(true);
     setError(null);
-    
+
     try {
-      console.log('=== 🔍 検索開始 ===');
-      console.log('📝 検索キーワード:', actualQuery);
-      console.log('🎯 ボーナス:', disableBonus ? '無効' : '有効');
-      
-      // クエリから法令名・条文番号を抽出（ボーナス無効時はスキップ）
+      console.log('=== 🔍 並列検索開始 ===');
+      console.log('📝 元クエリ:', actualQuery);
+
+      // クエリから法令名・条文番号を抽出
       let lawName = null;
       let articleNumbersKanji = [];
       if (!disableBonus) {
@@ -460,118 +761,46 @@ export default function App() {
         lawName = extracted.lawName;
         articleNumbersKanji = extracted.articleNumbersKanji;
       }
-      console.log('🔎 抽出結果:', { lawName, articleNumbersKanji });
-      
-      // 【第1段階】Embedding生成
-      setProcessingStep('🧬 質問文をEmbedding化中...');
-      setProgress(10);
-      
-      const queryEmbedding = await getQueryEmbedding(actualQuery);
-      console.log('✅ Embedding生成完了');
-      console.log('🧬 Embedding vector length:', queryEmbedding.length);
 
-      // 【第2段階】全chunk処理してからTop候補を選出
-      setProcessingStep('📦 法令データを読み込み中...');
-      setProgress(30);
-      
-      let totalArticleCount = 0;
-      
-      // ボーナススコア設定
-      const EXACT_MATCH_BONUS = 0.50;      // 法令名+条文番号完全一致
-      const LAW_NAME_MATCH_BONUS = 0.15;   // 法令名のみ一致
-      
-      // 全77chunkを検索対象にする
-      const dataChunks = lawsIndex.chunks.filter(c => c.filename.startsWith('laws_chunk_'));
-      const totalChunks = dataChunks.length;
-      
-      // Top20を保持（ヒープ的に管理）
-      let top20 = [];
-      const TOP_N = 20;
-      
-      // 全chunk検索（メモリ効率化：chunkごとに処理して解放）
-      for (let i = 0; i < dataChunks.length; i++) {
-        const chunk = dataChunks[i];
-        const progress = 30 + Math.round((i / totalChunks) * 40);
-        setProgress(progress);
-        setProcessingStep(`📦 ${i + 1}/${totalChunks} 読み込み中...`);
-        
-        // メモリ使用量をログ（Chrome限定）
-        if (performance.memory) {
-          const memMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
-          console.log(`📊 メモリ使用量: ${memMB}MB (chunk ${i})`);
-        }
-        
-        const chunkData = await loadLawChunk(chunk.filename);
-        
-        // GCに時間を与える（IndexedDBからの高速読み込み時のOOM対策）
-        await new Promise(resolve => setTimeout(resolve, 10));
-        
-        // このchunkの条文を処理
-        for (const [lawId, lawData] of Object.entries(chunkData.laws)) {
-          if (!lawData.articles) continue;
-          
-          for (const article of lawData.articles) {
-            if (!article.embedding || !Array.isArray(article.embedding)) {
-              continue;
-            }
-            
-            totalArticleCount++;
-            const similarity = cosineSimilarity(queryEmbedding, article.embedding);
-            
-            // ボーナススコア計算
-            let bonus = 0;
-            let matchType = '';
-            
-            const lawNameMatched = lawName && lawData.law_title && lawData.law_title === lawName;
-            const articleTitleKanji = extractArticleNumberFromTitle(article.title);
-            const articleNumberMatched = articleNumbersKanji.length > 0 && articleTitleKanji && articleNumbersKanji.includes(articleTitleKanji);
-            
-            if (lawNameMatched && articleNumberMatched) {
-              bonus = EXACT_MATCH_BONUS;
-              matchType = '🎯完全一致';
-            } else if (lawNameMatched) {
-              bonus = LAW_NAME_MATCH_BONUS;
-              matchType = '📘法令名一致';
-            }
-            
-            const score = similarity + bonus;
-            
-            // Top20に入るか判定
-            if (top20.length < TOP_N || score > top20[top20.length - 1].score) {
-              const candidate = {
-                law: { law_title: lawData.law_title, law_id: lawId },
-                article: { 
-                  title: article.title, 
-                  content: article.content,
-                  caption: article.caption,
-                  paragraphs: article.paragraphs
-                },
-                similarity: Math.round(similarity * 1000) / 1000,
-                score: Math.round(score * 1000) / 1000,
-                matchType: matchType
-              };
-              
-              // 挿入位置を見つけて挿入
-              let insertIndex = top20.findIndex(c => c.score < score);
-              if (insertIndex === -1) insertIndex = top20.length;
-              top20.splice(insertIndex, 0, candidate);
-              
-              // Top20を超えたら最後を削除
-              if (top20.length > TOP_N) {
-                top20.pop();
-              }
-            }
-          }
-        }
+      // 【第1段階】Embedding生成 + クエリ適正化を並列実行
+      setProcessingStep('🧬 質問文を処理中...');
+      setProgress(10);
+
+      const [queryEmbedding, optimizedQuery] = await Promise.all([
+        getQueryEmbedding(actualQuery),
+        optimizeQuery(actualQuery, conversations)
+      ]);
+
+      console.log('✅ 元クエリEmbedding生成完了');
+      console.log('🔄 適正化クエリ:', optimizedQuery || '(生成失敗)');
+
+      // 適正化クエリのEmbeddingも生成（適正化成功時のみ）
+      let optimizedEmbedding = null;
+      if (optimizedQuery && optimizedQuery !== actualQuery) {
+        setProcessingStep('🧬 適正化クエリをEmbedding化中...');
+        optimizedEmbedding = await getQueryEmbedding(optimizedQuery);
+        console.log('✅ 適正化クエリEmbedding生成完了');
       }
-      
-      console.log('✅ Top20選出完了');
-      console.log('📊 全条文数:', totalArticleCount);
-      console.log('💾 検索済みchunk数:', totalChunks);
-      console.log('🏆 Top20のスコア:');
+
+      // 【第2段階】検索実行（1回のchunk読み込みで両方処理）
+      setProcessingStep('📦 法令データを検索中...');
+      setProgress(30);
+
+      const top20 = await searchWithDualEmbeddings(
+        queryEmbedding,
+        optimizedEmbedding,
+        lawName,
+        articleNumbersKanji
+      );
+      console.log('✅ 検索完了:', top20.length, '件');
+
+      setProgress(70);
+
+      console.log('🏆 最終Top20のスコア:');
       top20.forEach((item, i) => {
+        const sourceInfo = item.sources ? ` [${item.sources.join('+')}]` : '';
         const bonusInfo = item.matchType ? ` ${item.matchType}` : '';
-        console.log(`  ${i + 1}. [${item.score}] ${item.law.law_title} ${item.article.title}${bonusInfo}`);
+        console.log(`  ${i + 1}. [${item.score}] ${item.law.law_title} ${item.article.title}${bonusInfo}${sourceInfo}`);
       });
 
       // 【第3段階】ClaudeにTop200を渡して最適な条文を選択・解説させる
@@ -586,7 +815,8 @@ export default function App() {
       let articleContext = '\n\n【候補条文データ（スコア順Top20）】\n';
       top20.forEach((item, index) => {
         const matchInfo = item.matchType ? ` ${item.matchType}` : '';
-        articleContext += `\n${index + 1}. 【スコア: ${item.score}${matchInfo}】 ${item.law.law_title} ${item.article.title}`;
+        const sourceInfo = item.sources && item.sources.length > 1 ? ' [両方でヒット]' : '';
+        articleContext += `\n${index + 1}. 【スコア: ${item.score}${matchInfo}${sourceInfo}】 ${item.law.law_title} ${item.article.title}`;
         if (item.article.caption) {
           articleContext += ` ${item.article.caption}`;
         }
@@ -599,6 +829,18 @@ export default function App() {
         articleContext += '\n';
       });
 
+      // 簡潔モードと通常モードでプロンプトを分岐
+      const instructionText = proMode
+        ? `【指示（簡潔回答）】
+- 関連条文を列挙し、各条文の関連性を簡潔に記載
+- 条文内容の説明は不要
+- 「【法令名 第X条】：関連性」の形式で`
+        : `【指示】
+- まず結論を述べる
+- 関連条文を「【法令名 第X条】」形式で引用しつつ、平易な言葉で説明
+- 法律用語は必要に応じて補足
+- 注意点や例外があれば明記`;
+
       const combinedPrompt = `あなたは法令検索のアシスタントです。
 
 【ユーザーの質問】
@@ -610,34 +852,28 @@ ${articleContext}
 - 候補条文は「スコア」の高い順に並んでいます
 - 「🎯完全一致」マークがある条文は、ユーザーが指定した法令名・条文番号と完全に一致しています。**最優先で選んでください**
 - 「📘法令名一致」マークがある条文は、ユーザーが指定した法令の条文です。優先的に選んでください
-- スコア0.85以上の条文は関連性が高いため、優先して選んでください
+- 「両方でヒット」マークがある条文は、元の質問と適正化した質問の両方で見つかった条文です。信頼度が高いため優先してください
+- スコアが高い条文は関連性が高いため、優先して選んでください
 - 上位10番以内の条文を優先してください
 - 条文タイトルだけでなく、条文の内容全体を見て判断してください
 
-【指示】
-1. 上記の候補条文の中から、質問に**直接**関連する条文があるか判断してください
-2. 直接関連する条文がある場合は、それを選んで解説してください
-3. 直接関連する条文がない場合は、found_direct_matchをfalseにし、関連する法的概念を検索するためのキーワードを提案してください
-4. 条文を引用する際は「【法令名 第X条】」の形式で明記してください
+【絶対厳守】
+- 回答には**上記の候補条文リスト（1〜20）に含まれる条文のみ**を使用してください
+- 候補リストにない条文は、たとえ関連がありそうでも**絶対に言及しないでください**
+- あなたの知識にある条文でも、候補リストにないものは使用禁止です
+
+${instructionText}
 
 【回答形式】
 必ず以下のJSON形式で回答してください：
 
 {
-  "found_direct_match": true または false,
   "selected_indices": [1, 2, 3],
-  "explanation": "ここに解説文を記載",
-  "suggested_query": "関連条文検索用のキーワード（found_direct_matchがfalseの場合のみ）"
+  "explanation": "ここに解説文を記載"
 }
 
-- found_direct_match: 質問に直接回答する条文が見つかったかどうか
 - selected_indices: 使用した条文の番号（候補リストの1〜20から選択、見つからない場合は空配列[]）
 - explanation: 質問への回答文。見つからない場合は「お探しの内容に直接該当する条文は見つかりませんでした。」と記載
-- suggested_query: ユーザーの質問を**条文検索に適した自然な日本語の文章**に書き換えてください。
-  - 口語表現を法律用語に変換（例：「届け出る」→「登記申請」、「いつまで」→「期限」）
-  - **必ず自然な文章で**（キーワード羅列は絶対NG）
-  （良い例：「株式会社の取締役変更登記の申請期限について」「意思表示の効力発生時期について」）
-  （悪い例：「変更登記期限届出申請会社法」← これはNG）
 
 CRITICAL: 必ず有効なJSON形式で回答してください。マークダウンのコードブロック記号は含めないでください。
 `;
@@ -696,7 +932,6 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
         console.error('⚠️ JSON解析エラー、フォールバック処理');
         answer = claudeResponse;
         finalArticles = top20.slice(0, 3);
-        responseData = { found_direct_match: true };
       }
 
       setConversations(prev => [...prev, {
@@ -708,9 +943,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
           lawData: item.law,
           similarity: item.similarity
         })),
-        timestamp: new Date(),
-        foundDirectMatch: responseData.found_direct_match !== false,
-        suggestedQuery: responseData.suggested_query || null
+        timestamp: new Date()
       }]);
       
       setQuery('');
@@ -757,7 +990,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
   // ===== メインUI =====
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto">
+      <div className="w-full px-4 lg:px-8">
         <div className="bg-white shadow-sm">
           {/* ヘッダー */}
           <div className="border-b border-gray-200 px-6 py-4">
@@ -794,6 +1027,36 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
                     <div>💡 例：「民法２３４条について教えて」</div>
                     <div>💡 例：「会社設立の必要書類は？」</div>
                   </div>
+
+                  {/* 簡潔回答モード切替 */}
+                  <div className="mt-8 flex items-center justify-center gap-3">
+                    <span className={`text-sm ${proMode ? 'text-gray-400' : 'text-gray-700 font-medium'}`}>
+                      通常回答
+                    </span>
+                    <button
+                      onClick={() => {
+                        const newMode = !proMode;
+                        setProMode(newMode);
+                        saveProMode(newMode);
+                      }}
+                      disabled={loading}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                      } ${proMode ? 'bg-blue-600' : 'bg-gray-300'}`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          proMode ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <span className={`text-sm ${proMode ? 'text-blue-700 font-medium' : 'text-gray-400'}`}>
+                      簡潔回答
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">
+                    簡潔回答：条文の詳細解説を省略し、関連性のみ表示
+                  </p>
                 </div>
               )}
 
@@ -821,159 +1084,141 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
                       </div>
                     </div>
 
-                    {/* AIの回答 */}
-                    <div className="flex justify-start">
-                      <div className="max-w-3xl">
+                    {/* AIの回答と条文を左右分割（PCのみ） */}
+                    <div className="flex flex-col lg:flex-row gap-4">
+                      {/* 左側: AI解説 */}
+                      <div className="lg:w-1/2">
                         <div className="flex items-start gap-3">
                           <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-md">
                             AI
                           </div>
-                          <div className="flex-grow bg-white rounded-2xl shadow-sm border border-gray-200 px-6 py-5">
+                          <div
+                            className="flex-grow bg-white rounded-2xl shadow-sm border border-gray-200 px-6 py-5"
+                            data-explanation-conv-id={conv.id}
+                          >
                             <div className="prose prose-base max-w-none">
                               {formatExplanation(conv.answer)}
                             </div>
-                            
-                            {/* 直接条文が見つからなかった場合の再検索ボタン */}
-                            {!conv.foundDirectMatch && conv.suggestedQuery && (
-                              <div className="mt-4 pt-4 border-t border-gray-200">
-                                <p className="text-sm text-gray-600 mb-2">
-                                  💡 質問を法律用語に最適化しました
-                                </p>
-                                <button
-                                  onClick={() => {
-                                    console.log('🔘 ボタンクリック:', conv.suggestedQuery);
-                                    handleSearch(conv.suggestedQuery, { disableBonus: true });
-                                  }}
-                                  disabled={loading}
-                                  className="cursor-pointer inline-flex items-center gap-2 bg-blue-100 hover:bg-blue-200 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                  🔄 最適化した質問で再検索
-                                </button>
-                                <p className="text-xs text-gray-400 mt-2">
-                                  検索キーワード：{conv.suggestedQuery}
-                                </p>
-                              </div>
-                            )}
                           </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* 関連条文セクション */}
-                    {conv.relevantArticles && conv.relevantArticles.length > 0 && (
-                      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200 shadow-sm">
-                        <div className="flex items-center gap-2 mb-5">
-                          <span className="text-lg">📋</span>
-                          <span className="text-blue-700 font-bold text-base">参照条文</span>
-                          <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">{conv.relevantArticles.length}件</span>
-                        </div>
-                        <div className="space-y-4">
-                          {conv.relevantArticles.map((item, index) => (
-                            <div key={`${item.lawData.law_id}-${item.article.number}-${index}`} 
-                                 className="bg-white rounded-lg border-2 border-blue-100 hover:border-blue-300 transition-colors p-5">
-                              <div className="flex items-start justify-between">
-                                <div className="flex-grow">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <span className="text-xs bg-gradient-to-r from-blue-600 to-blue-700 text-white px-3 py-1 rounded-full font-semibold">
-                                      {item.lawData.law_title}
-                                    </span>
-                                    <span className="font-bold text-gray-900 text-base">
-                                      {item.article.title}
-                                    </span>
-                                  </div>
-                                  {item.article.caption && (
-                                    <p className="font-medium mb-3 bg-gray-50 px-3 py-1 rounded border-l-4 border-blue-400 text-gray-700">
-                                      {item.article.caption}
-                                    </p>
-                                  )}
-                                  
-                                  {!expandedArticles.has(`${item.lawData.law_id}-${item.article.number}`) ? (
-                                    <div className="leading-7 bg-gray-50 p-4 rounded text-gray-700 text-base">
-                                      {item.article.paragraphs.slice(0, 1).map((paragraph, pIndex) => (
-                                        <div key={pIndex}>
-                                          {paragraph.sentences.slice(0, 1).map((sentence, sIndex) => (
-                                            <span key={sIndex}>{sentence.text}</span>
+                      {/* 右側: 関連条文（sticky + 独立スクロール） */}
+                      <div className="lg:w-1/2 lg:self-start lg:sticky lg:top-4" data-conv-id={conv.id}>
+                        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200 shadow-sm">
+                          <div className="flex items-center gap-2 mb-4">
+                            <span className="text-lg">📋</span>
+                            <span className="text-blue-700 font-bold text-base">参照条文</span>
+                            {conv.relevantArticles && conv.relevantArticles.length > 0 && (
+                              <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">{conv.relevantArticles.length}件</span>
+                            )}
+                          </div>
+                          {(!conv.relevantArticles || conv.relevantArticles.length === 0) ? (
+                            <div className="text-gray-500 text-sm py-4 text-center">該当なし</div>
+                          ) : (
+                            <div className="space-y-3 max-h-[calc(100vh-180px)] overflow-y-auto">
+                              {conv.relevantArticles.map((item, index) => (
+                                <div key={`${item.lawData.law_id}-${item.article.number}-${index}`}
+                                     className="article-card bg-white rounded-lg border-2 border-blue-100 hover:border-blue-300 transition-all p-4">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex-grow">
+                                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                                        <span className="text-xs bg-gradient-to-r from-blue-600 to-blue-700 text-white px-3 py-1 rounded-full font-semibold">
+                                          {item.lawData.law_title}
+                                        </span>
+                                        <span className="font-bold text-gray-900 text-sm">
+                                          {item.article.title}
+                                        </span>
+                                      </div>
+                                      {item.article.caption && (
+                                        <p className="font-medium mb-2 bg-gray-50 px-2 py-1 rounded border-l-4 border-blue-400 text-gray-700 text-sm">
+                                          {item.article.caption}
+                                        </p>
+                                      )}
+
+                                      {!expandedArticles.has(`${item.lawData.law_id}-${item.article.number}`) ? (
+                                        <div className="leading-6 bg-gray-50 p-3 rounded text-gray-700 text-sm">
+                                          {item.article.paragraphs.slice(0, 1).map((paragraph, pIndex) => (
+                                            <div key={pIndex}>
+                                              {paragraph.sentences.slice(0, 1).map((sentence, sIndex) => (
+                                                <span key={sIndex}>{sentence.text}</span>
+                                              ))}
+                                              {paragraph.sentences.length > 1 && <span className="text-gray-400 ml-1">...</span>}
+                                            </div>
                                           ))}
-                                          {paragraph.sentences.length > 1 && <span className="text-gray-400 ml-1">...</span>}
+                                          {item.article.paragraphs.length > 1 && (
+                                            <div className="text-gray-500 text-xs mt-2 italic">
+                                              ＋他{item.article.paragraphs.length - 1}項
+                                            </div>
+                                          )}
                                         </div>
-                                      ))}
-                                      {item.article.paragraphs.length > 1 && (
-                                        <div className="text-gray-500 text-xs mt-2 italic">
-                                          ＋他{item.article.paragraphs.length - 1}項
+                                      ) : (
+                                        <div className="leading-6 space-y-3 bg-gray-50 p-4 rounded border border-gray-200 text-gray-800 text-sm">
+                                          {item.article.paragraphs.map((paragraph, pIndex) => {
+                                            const hasItems = paragraph.items && paragraph.items.length > 0;
+
+                                            // itemsがある場合、sentencesからitemsと重複する内容を除外
+                                            let displaySentences = paragraph.sentences;
+                                            if (hasItems) {
+                                              // itemsの最初のテキストを取得
+                                              const itemTexts = new Set(
+                                                paragraph.items.flatMap(it => it.sentences.map(s => s.text))
+                                              );
+                                              // sentencesからitemsと重複しないものだけを抽出
+                                              displaySentences = paragraph.sentences.filter(s => !itemTexts.has(s.text));
+                                            }
+
+                                            return (
+                                              <div key={pIndex}>
+                                                {paragraph.num !== "1" && (
+                                                  <div className="font-bold text-blue-600 mb-1">{paragraph.num}</div>
+                                                )}
+
+                                                {displaySentences.length > 0 && (
+                                                  <div className="space-y-1 mb-2">
+                                                    {displaySentences.map((sentence, sIndex) => (
+                                                      <div key={sIndex}>{sentence.text}</div>
+                                                    ))}
+                                                  </div>
+                                                )}
+
+                                                {hasItems && (
+                                                  <div className="space-y-2 mt-3">
+                                                    {paragraph.items.map((subItem, itemIndex) => (
+                                                      <div key={itemIndex} className="flex gap-2 ml-3 border-l-2 border-blue-300 pl-2 py-0.5">
+                                                        <span className="font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded min-w-[40px] text-center flex-shrink-0 h-fit text-xs">
+                                                          {subItem.item_title}
+                                                        </span>
+                                                        <div className="flex-1">
+                                                          {subItem.sentences.map((sentence, sIndex) => (
+                                                            <span key={sIndex}>{sentence.text}</span>
+                                                          ))}
+                                                        </div>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
                                         </div>
                                       )}
                                     </div>
-                                  ) : (
-                                    <div className="leading-7 space-y-4 bg-gray-50 p-5 rounded border border-gray-200 text-gray-800 text-base">
-                                      {item.article.paragraphs.map((paragraph, pIndex) => {
-                                        const hasItems = paragraph.items && paragraph.items.length > 0;
-                                        let mainTextEndIndex = paragraph.sentences.length;
-                                        if (hasItems) {
-                                          for (let i = 0; i < paragraph.sentences.length; i++) {
-                                            if (paragraph.sentences[i].text.includes('次に掲げる') ||
-                                                paragraph.sentences[i].text.includes('次の各号') ||
-                                                paragraph.sentences[i].text.includes('左の各号')) {
-                                              mainTextEndIndex = Math.min(i + 2, paragraph.sentences.length);
-                                              break;
-                                            }
-                                          }
-                                        }
-                                        
-                                        return (
-                                          <div key={pIndex}>
-                                            {paragraph.num !== "1" && (
-                                              <div className="font-bold text-blue-600 mb-2">{paragraph.num}</div>
-                                            )}
-                                            
-                                            {hasItems ? (
-                                              <div className="space-y-2 mb-3">
-                                                {paragraph.sentences.slice(0, mainTextEndIndex).map((sentence, sIndex) => (
-                                                  <div key={sIndex}>{sentence.text}</div>
-                                                ))}
-                                              </div>
-                                            ) : (
-                                              <div className="space-y-2 mb-3">
-                                                {paragraph.sentences.map((sentence, sIndex) => (
-                                                  <div key={sIndex}>{sentence.text}</div>
-                                                ))}
-                                              </div>
-                                            )}
-                                            
-                                            {hasItems && (
-                                              <div className="space-y-3 mt-4">
-                                                {paragraph.items.map((subItem, itemIndex) => (
-                                                  <div key={itemIndex} className="flex gap-3 ml-4 border-l-2 border-blue-300 pl-3 py-1">
-                                                    <span className="font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded min-w-[50px] text-center flex-shrink-0 h-fit">
-                                                      {subItem.item_title}
-                                                    </span>
-                                                    <div className="flex-1">
-                                                      {subItem.sentences.map((sentence, sIndex) => (
-                                                        <span key={sIndex}>{sentence.text}</span>
-                                                      ))}
-                                                    </div>
-                                                  </div>
-                                                ))}
-                                              </div>
-                                            )}
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
+
+                                    <button
+                                      onClick={() => toggleArticleExpansion(item.lawData.law_id, item.article.number)}
+                                      className="ml-2 px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded text-xs font-medium transition-colors flex-shrink-0 border border-blue-200"
+                                    >
+                                      {expandedArticles.has(`${item.lawData.law_id}-${item.article.number}`) ? '▲' : '▼'}
+                                    </button>
+                                  </div>
                                 </div>
-                                
-                                <button
-                                  onClick={() => toggleArticleExpansion(item.lawData.law_id, item.article.number)}
-                                  className="ml-4 px-3 py-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg text-sm font-medium transition-colors flex-shrink-0 border border-blue-200"
-                                >
-                                  {expandedArticles.has(`${item.lawData.law_id}-${item.article.number}`) ? '▲ 閉じる' : '▼ 全文'}
-                                </button>
-                              </div>
+                              ))}
                             </div>
-                          ))}
+                          )}
                         </div>
                       </div>
-                    )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1000,25 +1245,67 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
 
             {/* 入力エリア */}
             <div className="border-t border-gray-200 bg-white p-4">
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !loading && handleSearch()}
-                  placeholder="法的な質問を入力してください（例：手付金について、民法234条、会社設立に必要な書類）"
-                  className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  disabled={loading}
-                />
-                <button
-                  onClick={handleSearch}
-                  disabled={loading || !query.trim()}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>}
-                  {loading ? '検索中' : '送信'}
-                </button>
-              </div>
+              {isTokenLimitReached ? (
+                <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">⚠️</span>
+                      <div>
+                        <p className="font-semibold text-amber-800">会話の上限に達しました</p>
+                        <p className="text-sm text-amber-700">新しい会話を始めてください（約{Math.round(tokenCount / 1000)}Kトークン使用）</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setConversations([]);
+                        setTokenCount(0);
+                        setIsTokenLimitReached(false);
+                      }}
+                      className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 font-medium"
+                    >
+                      🔄 新しい会話を開始
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && !loading && handleSearch()}
+                      placeholder="法的な質問を入力してください（例：手付金について、民法234条、会社設立に必要な書類）"
+                      className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                      disabled={loading}
+                    />
+                    <button
+                      onClick={handleSearch}
+                      disabled={loading || !query.trim()}
+                      className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>}
+                      {loading ? '検索中' : '送信'}
+                    </button>
+                  </div>
+                  {conversations.length > 0 && (
+                    <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                      <span>使用トークン: 約{Math.round(tokenCount / 1000)}K / 200K</span>
+                      <button
+                        onClick={() => {
+                          if (confirm('会話履歴をクリアしますか？')) {
+                            setConversations([]);
+                            setTokenCount(0);
+                          }
+                        }}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        会話をクリア
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
               {error && (
                 <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
                   <p className="text-red-700 text-sm">{error}</p>
@@ -1030,19 +1317,25 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
       </div>
 
       {/* 設定モーダル */}
-      {showSettings && <SettingsModal onClose={() => {
-        setShowSettings(false);
-        checkApiKey();
-      }} />}
+      {showSettings && <SettingsModal
+        onClose={() => {
+          setShowSettings(false);
+          checkApiKey();
+          checkProMode();
+        }}
+        proMode={proMode}
+        setProMode={setProMode}
+      />}
     </div>
   );
 }
 
 // ===== 設定モーダルコンポーネント =====
-function SettingsModal({ onClose }) {
+function SettingsModal({ onClose, proMode, setProMode }) {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [message, setMessage] = useState(null);
+  const [localProMode, setLocalProMode] = useState(proMode);
 
   useEffect(() => {
     const key = getApiKey();
@@ -1063,7 +1356,9 @@ function SettingsModal({ onClose }) {
     }
 
     saveApiKey(apiKey);
-    setMessage({ type: 'success', text: 'APIキーを保存しました' });
+    saveProMode(localProMode);
+    setProMode(localProMode);
+    setMessage({ type: 'success', text: '設定を保存しました' });
     setTimeout(() => {
       onClose();
     }, 1500);
@@ -1120,6 +1415,30 @@ function SettingsModal({ onClose }) {
               <li>「API Keys」→「Create Key」</li>
               <li>生成されたキーをコピーして上記に貼り付け</li>
             </ol>
+          </div>
+
+          {/* 簡潔回答モード設定 */}
+          <div className="border-t pt-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">簡潔回答モード</label>
+                <p className="text-xs text-gray-500 mt-1">
+                  条文の詳細解説を省略し、関連性のみ表示
+                </p>
+              </div>
+              <button
+                onClick={() => setLocalProMode(!localProMode)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  localProMode ? 'bg-blue-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    localProMode ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
           </div>
 
           {message && (

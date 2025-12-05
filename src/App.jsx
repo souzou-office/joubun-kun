@@ -468,7 +468,7 @@ export default function App() {
       
       try {
         const R2_BASE_URL = 'https://pub-31e9c70796b94125976e0d215b8de3b1.r2.dev';
-        const indexResponse = await fetch(`${R2_BASE_URL}/laws_index.json`);
+        const indexResponse = await fetch(`${R2_BASE_URL}/laws_index_v2.json`);
         const index = await indexResponse.json();
         setLawsIndex(index);
         console.log(`✅ ${index.total_laws}法令のインデックス読み込み完了`);
@@ -964,8 +964,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="max-w-2xl w-full bg-white rounded-lg shadow-lg p-8">
-          <div className="text-6xl mb-6 text-center">⚖️</div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-4 text-center">条文くん</h1>
+          <img src="/joubun-kun/logo.png" alt="条文くん" className="h-40 mx-auto mb-6" />
           
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
             <div className="flex items-center justify-center mb-4">
@@ -993,11 +992,11 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
       <div className="w-full px-4 lg:px-8">
         <div className="bg-white shadow-sm">
           {/* ヘッダー */}
-          <div className="border-b border-gray-200 px-6 py-4">
+          <div className="border-b border-gray-200 px-4 py-1">
             <div className="flex justify-between items-center">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">条文くん</h1>
-                <p className="text-sm text-gray-600 mt-1">
+              <div className="flex items-center gap-2">
+                <img src="/joubun-kun/logo.png" alt="条文くん" className="h-16" />
+                <p className="text-sm text-gray-600">
                   {lawsIndex ? `${lawsIndex.total_laws}法令・検索可能` : 'データ準備中'}
                 </p>
               </div>
@@ -1019,8 +1018,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
             <div className="flex-1 overflow-y-auto p-6">
               {conversations.length === 0 && (
                 <div className="text-center py-20">
-                  <div className="text-4xl mb-4">⚖️</div>
-                  <h2 className="text-xl font-semibold text-gray-700 mb-2">条文くん</h2>
+                  <img src="/joubun-kun/logo.png" alt="条文くん" className="h-48 mx-auto mb-4" />
                   <p className="text-gray-500 mb-6">法的な質問を入力してください</p>
                   <div className="text-sm text-gray-400 space-y-1">
                     <div>💡 例：「手付金を放棄して契約解除したい」</div>

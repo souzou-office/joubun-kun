@@ -136,37 +136,48 @@ const toKanjiNumber = (num) => {
 
 // 主要法令名リスト → 廃止して正規表現で抽出
 
-// クエリから法令名と条文番号を抽出（複数条文対応）
+// クエリから法令名と条文番号を抽出（複数条文対応・枝番対応）
 const extractLawAndArticle = (query) => {
   let lawName = null;
-  let articleNumbersKanji = [];  // 複数対応のため配列に
-  
+  let articleTitlesKanji = [];  // 「第三条の二」形式の配列
+
   // 全角数字を半角に変換
-  const normalizedQuery = query.replace(/[０-９]/g, (s) => 
+  const normalizedQuery = query.replace(/[０-９]/g, (s) =>
     String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
   );
-  
+
   // 法令名を正規表現で抽出（「〇〇法」「〇〇令」「〇〇規則」等）
   const lawMatch = normalizedQuery.match(/([\u4e00-\u9fff]+(?:法|令|規則|条例|規程|憲章))/);
   if (lawMatch) {
     lawName = lawMatch[1];
   }
-  
-  // 条文番号を抽出（アラビア数字・複数対応）
-  const articleMatches = normalizedQuery.matchAll(/第?(\d+)条/g);
+
+  // 条文番号を抽出（アラビア数字・枝番対応）
+  // 「3条の2」「42条の2」のようなパターンに対応
+  const articleMatches = normalizedQuery.matchAll(/第?(\d+)条(?:の(\d+))?/g);
   for (const match of articleMatches) {
-    articleNumbersKanji.push(toKanjiNumber(parseInt(match[1], 10)));
-  }
-  
-  // 漢数字での条文番号も対応（複数対応）
-  const kanjiMatches = normalizedQuery.matchAll(/第([一二三四五六七八九十百千]+)条/g);
-  for (const match of kanjiMatches) {
-    if (!articleNumbersKanji.includes(match[1])) {
-      articleNumbersKanji.push(match[1]);
+    let title = '第' + toKanjiNumber(parseInt(match[1], 10)) + '条';
+    if (match[2]) {
+      title += 'の' + toKanjiNumber(parseInt(match[2], 10));
+    }
+    if (!articleTitlesKanji.includes(title)) {
+      articleTitlesKanji.push(title);
     }
   }
-  
-  return { lawName, articleNumbersKanji };
+
+  // 漢数字での条文番号も対応（枝番対応）
+  const kanjiMatches = normalizedQuery.matchAll(/第([一二三四五六七八九十百千]+)条(?:の([一二三四五六七八九十]+))?/g);
+  for (const match of kanjiMatches) {
+    let title = '第' + match[1] + '条';
+    if (match[2]) {
+      title += 'の' + match[2];
+    }
+    if (!articleTitlesKanji.includes(title)) {
+      articleTitlesKanji.push(title);
+    }
+  }
+
+  return { lawName, articleTitlesKanji };
 };
 
 // 条文タイトルから条文番号（漢数字）を抽出
@@ -579,9 +590,9 @@ export default function App() {
       let searchQueries = queryResult.queries;
       if (queryResult.type === 'direct') {
         const extracted = extractLawAndArticle(actualQuery);
-        if (extracted.lawName && extracted.articleNumbersKanji.length > 0) {
-          // 「民法323条」→「民法 第三百二十三条」に変換
-          const normalizedQuery = `${extracted.lawName} 第${extracted.articleNumbersKanji[0]}条`;
+        if (extracted.lawName && extracted.articleTitlesKanji.length > 0) {
+          // 「民法3条の2」→「民法 第三条の二」に変換
+          const normalizedQuery = `${extracted.lawName} ${extracted.articleTitlesKanji[0]}`;
           searchQueries = [normalizedQuery];
           console.log('📝 正規化クエリ:', normalizedQuery);
         }
@@ -609,8 +620,12 @@ export default function App() {
 
       console.log('🏆 Top20のスコア:');
       top20.forEach((item, i) => {
-        console.log(`  ${i + 1}. [${item.score.toFixed(4)}] ${item.law.law_title} ${item.article.title}`);
+        console.log(`  ${i + 1}. [${item.score.toFixed(4)}] ${item.law.law_title} ${item.article.title} | paragraphs: ${item.article.paragraphs?.length || 0}`);
       });
+      // デバッグ: 1件目の詳細
+      if (top20.length > 0) {
+        console.log('📝 1件目の条文詳細:', JSON.stringify(top20[0].article).substring(0, 300));
+      }
 
       // 【第3段階】ClaudeにTop200を渡して最適な条文を選択・解説させる
       setProcessingStep('🤖 AIが条文を分析・解説中...');
@@ -729,7 +744,10 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
         
         console.log(`✅ ${finalArticles.length}個の条文を選択`);
         finalArticles.forEach((item, i) => {
-          console.log(`  ${i + 1}. ${item.law.law_title} ${item.article.title}`);
+          console.log(`  ${i + 1}. ${item.law.law_title} ${item.article.title} | paragraphs: ${item.article.paragraphs?.length || 0}`);
+          if (item.article.paragraphs?.length > 0) {
+            console.log(`      内容: ${item.article.paragraphs[0].sentences?.[0]?.text?.substring(0, 30)}...`);
+          }
         });
         
       } catch (parseError) {
@@ -935,25 +953,31 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
                                         </p>
                                       )}
 
-                                      {!expandedArticles.has(`${item.lawData.law_id}-${item.article.number}`) ? (
+                                      {!expandedArticles.has(`${item.lawData.law_id}-${item.article.title}`) ? (
                                         <div className="leading-6 bg-gray-50 p-3 rounded text-gray-700 text-sm">
-                                          {item.article.paragraphs.slice(0, 1).map((paragraph, pIndex) => (
-                                            <div key={pIndex}>
-                                              {paragraph.sentences.slice(0, 1).map((sentence, sIndex) => (
-                                                <span key={sIndex}>{sentence.text}</span>
+                                          {(item.article.paragraphs || []).length === 0 ? (
+                                            <div className="text-gray-400 italic">条文内容を取得中...</div>
+                                          ) : (
+                                            <>
+                                              {item.article.paragraphs.slice(0, 1).map((paragraph, pIndex) => (
+                                                <div key={pIndex}>
+                                                  {(paragraph.sentences || []).slice(0, 1).map((sentence, sIndex) => (
+                                                    <span key={sIndex}>{sentence.text}</span>
+                                                  ))}
+                                                  {(paragraph.sentences || []).length > 1 && <span className="text-gray-400 ml-1">...</span>}
+                                                </div>
                                               ))}
-                                              {paragraph.sentences.length > 1 && <span className="text-gray-400 ml-1">...</span>}
-                                            </div>
-                                          ))}
-                                          {item.article.paragraphs.length > 1 && (
-                                            <div className="text-gray-500 text-xs mt-2 italic">
-                                              ＋他{item.article.paragraphs.length - 1}項
-                                            </div>
+                                              {item.article.paragraphs.length > 1 && (
+                                                <div className="text-gray-500 text-xs mt-2 italic">
+                                                  ＋他{item.article.paragraphs.length - 1}項
+                                                </div>
+                                              )}
+                                            </>
                                           )}
                                         </div>
                                       ) : (
                                         <div className="leading-6 space-y-3 bg-gray-50 p-4 rounded border border-gray-200 text-gray-800 text-sm">
-                                          {item.article.paragraphs.map((paragraph, pIndex) => {
+                                          {(item.article.paragraphs || []).map((paragraph, pIndex) => {
                                             const hasItems = paragraph.items && paragraph.items.length > 0;
 
                                             // itemsがある場合、sentencesからitemsと重複する内容を除外
@@ -1005,10 +1029,10 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
                                     </div>
 
                                     <button
-                                      onClick={() => toggleArticleExpansion(item.lawData.law_id, item.article.number)}
+                                      onClick={() => toggleArticleExpansion(item.lawData.law_id, item.article.title)}
                                       className="ml-2 px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded text-xs font-medium transition-colors flex-shrink-0 border border-blue-200"
                                     >
-                                      {expandedArticles.has(`${item.lawData.law_id}-${item.article.number}`) ? '▲' : '▼'}
+                                      {expandedArticles.has(`${item.lawData.law_id}-${item.article.title}`) ? '▲' : '▼'}
                                     </button>
                                   </div>
                                 </div>

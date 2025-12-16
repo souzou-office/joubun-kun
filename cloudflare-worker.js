@@ -4,6 +4,35 @@
 const EXACT_MATCH_BONUS = 2.0;
 const LAW_NAME_MATCH_BONUS = 0.15;
 
+// 主要法令名→法令IDマッピング（ベクトル検索で見つからない場合のフォールバック用）
+const COMMON_LAW_IDS = {
+  '民法': '129AC0000000089',
+  '刑法': '140AC0000000045',
+  '憲法': '321CONSTITUTION',
+  '日本国憲法': '321CONSTITUTION',
+  '商法': '132AC0000000048',
+  '民事訴訟法': '408AC0000000109',
+  '刑事訴訟法': '323AC0000000131',
+  '会社法': '417AC0000000086',
+  '行政事件訴訟法': '337AC0000000139',
+  '行政手続法': '405AC0000000088',
+  '国家賠償法': '322AC0000000125',
+  '著作権法': '345AC0000000048',
+  '特許法': '334AC0000000121',
+  '労働基準法': '322AC0000000049',
+  '労働契約法': '419AC0000000128',
+  '借地借家法': '403AC0000000090',
+  '不動産登記法': '416AC0000000123',
+  '破産法': '416AC0000000075',
+  '民事再生法': '411AC0000000225',
+  '金融商品取引法': '323AC0000000025',
+  '独占禁止法': '322AC0000000054',
+  '私的独占の禁止及び公正取引の確保に関する法律': '322AC0000000054',
+  '消費者契約法': '412AC0000000061',
+  '個人情報保護法': '415AC0000000057',
+  '個人情報の保護に関する法律': '415AC0000000057',
+};
+
 // 単一の法令+条文を抽出（後方互換用）
 function extractLawInfo(query) {
   const result = { lawName: null, articleNum: null };
@@ -20,17 +49,26 @@ function extractLawInfo(query) {
   return result;
 }
 
-// 複数の法令+条文を抽出（「著作権法121条と民法323条」のようなクエリ対応）
+// 全角数字を半角に変換
+function normalizeNumbers(str) {
+  return str.replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
+}
+
+// 複数の法令+条文を抽出（「著作権法121条と民法323条」「民法42条の2」のようなクエリ対応）
 function extractMultipleLawInfos(query) {
   const results = [];
-  // 「〇〇法XXX条」のパターンを全て抽出
-  const pattern = /([\u4e00-\u9fff]+(?:法|令|規則|条例))[\s]*(?:第)?(\d+|[一二三四五六七八九十百千]+)条/g;
+  // 全角数字を半角に正規化
+  const normalizedQuery = normalizeNumbers(query);
+  // 「〇〇法XXX条」または「〇〇法XXX条のY」のパターンを全て抽出
+  // 枝番（の二、の2）にも対応
+  const pattern = /([\u4e00-\u9fff]+(?:法|令|規則|条例))[\s]*(?:第)?(\d+|[一二三四五六七八九十百千]+)条(?:の(\d+|[一二三四五六七八九十]+))?/g;
   let match;
-  while ((match = pattern.exec(query)) !== null) {
+  while ((match = pattern.exec(normalizedQuery)) !== null) {
     const lawName = match[1];
     const numStr = match[2];
     const articleNum = /^\d+$/.test(numStr) ? parseInt(numStr, 10) : kanjiToNumber(numStr);
-    results.push({ lawName, articleNum });
+    const subNum = match[3] ? (/^\d+$/.test(match[3]) ? parseInt(match[3], 10) : kanjiToNumber(match[3])) : null;
+    results.push({ lawName, articleNum, subNum });
   }
   return results;
 }
@@ -123,55 +161,54 @@ export default {
           });
         });
 
-        // 主要法令の法令IDマッピング
-        const LAW_ID_MAP = {
-          '民法': '129AC0000000089',
-          '刑法': '140AC0000000045',
-          '会社法': '417AC0000000086',
-          '憲法': '321CONSTITUTION',
-          '刑事訴訟法': '323AC0000000131',
-          '民事訴訟法': '408AC0000000109',
-          '商法': '132AC0000000048',
-          '行政事件訴訟法': '337AC0000000139',
-          '国家賠償法': '322AC0000000125',
-          '労働基準法': '322AC0000000049',
-          '借地借家法': '403AC0000000090',
-          '消費者契約法': '412AC0000000061',
-          '不正競争防止法': '405AC0000000047',
-          '著作権法': '345AC0000000048'
+        // 条文タイトルを生成するヘルパー関数（枝番対応）
+        const buildArticleTitle = (info) => {
+          let title = '第' + numberToKanji(info.articleNum) + '条';
+          if (info.subNum) {
+            title += 'の' + numberToKanji(info.subNum);
+          }
+          return title;
         };
 
         // 複数条文直接指定の場合：検索結果に該当条文がなければ強制追加
         // （ベクトル検索では「第三百二十三条」のような条文番号はマッチしにくいため）
         for (const info of multipleLawInfos) {
           if (!info.articleNum || !info.lawName) continue;
-          const artTitle = '第' + numberToKanji(info.articleNum) + '条';
+          const artTitle = buildArticleTitle(info);
 
           // 検索結果に目的の条文があるかチェック
           let found = false;
+          let foundLawId = null;
           for (const [key] of rrfScores.entries()) {
             const meta = metadataCache.get(key);
-            if (meta && meta.law_title && meta.law_title.includes(info.lawName) && meta.article_title === artTitle) {
-              found = true;
-              break;
+            if (meta && meta.law_title && meta.law_title.includes(info.lawName)) {
+              // この法令の法令IDを保存（後で使う可能性あり）
+              if (!foundLawId) foundLawId = meta.law_id;
+              if (meta.article_title === artTitle) {
+                found = true;
+                break;
+              }
             }
           }
+
+          // 検索結果からIDが見つからなければCOMMON_LAW_IDSを参照
+          if (!foundLawId && COMMON_LAW_IDS[info.lawName]) {
+            foundLawId = COMMON_LAW_IDS[info.lawName];
+          }
+
           // 見つからなければダミーで追加（後でR2から取得される）
-          if (!found) {
-            const lawId = LAW_ID_MAP[info.lawName];
-            if (lawId) {
-              const key = lawId + '_' + artTitle;
-              metadataCache.set(key, {
-                law_id: lawId,
-                law_title: info.lawName,
-                article_title: artTitle
-              });
-              rrfScores.set(key, 1 / (K + 1)); // 最高ランクとして追加
-            }
+          if (!found && foundLawId) {
+            const key = foundLawId + '_' + artTitle;
+            metadataCache.set(key, {
+              law_id: foundLawId,
+              law_title: info.lawName,
+              article_title: artTitle
+            });
+            rrfScores.set(key, 1 / (K + 1)); // 最高ランクとして追加
           }
         }
 
-        // ボーナス適用（複数条文対応）
+        // ボーナス適用（複数条文対応・枝番対応）
         const scoreMap = new Map();
         for (const [key, rrfScore] of rrfScores.entries()) {
           const metadata = metadataCache.get(key);
@@ -180,7 +217,7 @@ export default {
           // 複数の指定条文それぞれに対してチェック
           for (const info of multipleLawInfos) {
             if (!info.lawName) continue;
-            const artTitle = info.articleNum ? '第' + numberToKanji(info.articleNum) + '条' : null;
+            const artTitle = info.articleNum ? buildArticleTitle(info) : null;
 
             if (metadata.law_title && metadata.law_title.includes(info.lawName)) {
               if (artTitle && metadata.article_title === artTitle) {
@@ -232,7 +269,8 @@ export default {
           const minpoArticles = articlesByLaw.get(MINPO_ID);
           const subChunksNeeded = new Set();
           for (const articleTitle of minpoArticles) {
-            const match = articleTitle.match(/第(.+?)条/);
+            // 枝番（第三条の二など）に対応：「の」の前までを取得
+            const match = articleTitle.match(/第([一二三四五六七八九十百千]+)条/);
             if (match) {
               const artNum = kanjiToNumber(match[1]);
               for (const range of MINPO_RANGES) {
@@ -261,11 +299,35 @@ export default {
         }
 
         // 会社法（複数チャンクに分散: 076, 100, 101, 102, 103, 104, 105）
+        // 条文番号範囲: 076(1-178), 100(179-327), 101(328-449), 102(450-574), 103(575-702), 104(703-821), 105(822-979)
         const KAISHAHO_ID = '417AC0000000086';
-        const KAISHAHO_CHUNKS = [76, 100, 101, 102, 103, 104, 105];
+        const KAISHAHO_RANGES = [
+          { chunk: 76, min: 1, max: 178 },
+          { chunk: 100, min: 179, max: 327 },
+          { chunk: 101, min: 328, max: 449 },
+          { chunk: 102, min: 450, max: 574 },
+          { chunk: 103, min: 575, max: 702 },
+          { chunk: 104, min: 703, max: 821 },
+          { chunk: 105, min: 822, max: 979 }
+        ];
 
         if (articlesByLaw.has(KAISHAHO_ID)) {
-          const kaishahoPromises = KAISHAHO_CHUNKS.map(async (chunkNum) => {
+          const kaishahoArticles = articlesByLaw.get(KAISHAHO_ID);
+          const chunksNeeded = new Set();
+          for (const articleTitle of kaishahoArticles) {
+            // 枝番（第四百二十三条の二など）に対応
+            const match = articleTitle.match(/第([一二三四五六七八九十百千]+)条/);
+            if (match) {
+              const artNum = kanjiToNumber(match[1]);
+              for (const range of KAISHAHO_RANGES) {
+                if (artNum >= range.min && artNum <= range.max) {
+                  chunksNeeded.add(range.chunk);
+                  break;
+                }
+              }
+            }
+          }
+          const kaishahoPromises = [...chunksNeeded].map(async (chunkNum) => {
             try {
               const chunkName = 'laws_chunk_' + String(chunkNum).padStart(3, '0') + '_light.json';
               const obj = await env.R2.get(chunkName);

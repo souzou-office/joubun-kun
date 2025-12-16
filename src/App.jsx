@@ -1,9 +1,107 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { pipeline } from '@xenova/transformers';
 
-// グローバル変数
-let embeddingPipeline = null;
+// Cloudflare Worker URL
+const WORKER_URL = 'https://morning-surf-f117.ikeda-250.workers.dev';
 // メモリキャッシュ廃止（OOM対策）
+
+// ===== クエリ分類 & マルチクエリ生成 =====
+// 挨拶/条文直接指定/法的質問を分類し、必要に応じて3種類のクエリを生成
+const classifyAndGenerateQueries = async (originalQuery, conversationHistory = []) => {
+  const apiKey = getApiKey();
+  if (!apiKey) return { type: 'legal', queries: [originalQuery] };
+
+  // 直近の会話履歴を文脈として追加（最大2件）
+  let contextText = '';
+  if (conversationHistory.length > 0) {
+    const recentConvs = conversationHistory.slice(-2);
+    contextText = '\n【直近の会話履歴】\n';
+    recentConvs.forEach(conv => {
+      contextText += `Q: ${conv.question}\n`;
+      const shortAnswer = conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer;
+      contextText += `A: ${shortAnswer}\n\n`;
+    });
+  }
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 500,
+        messages: [{
+          role: 'user',
+          content: `ユーザーの入力を分類し、検索クエリを生成してください。
+${contextText}
+【ユーザーの入力】
+${originalQuery}
+
+【分類ルール】
+1. "greeting" - 挨拶・雑談（こんにちは、ありがとう、さようなら等）→ 検索不要
+2. "direct" - 条文直接指定（民法709条、会社法423条等）→ 元クエリのみで検索
+3. "legal" - 法的な質問 → 3種類のクエリを生成
+
+【クエリ生成ルール（legalの場合のみ）】
+3種類の異なる視点でクエリを生成：
+- original: ユーザーの言葉をできるだけ残し、検索ノイズ（「教えて」等）だけ除去
+- legal: 法令条文で使われる厳密な法律用語に変換（例：財布取った→窃取、他人の財物）
+- broad: 抽象的・状況的な表現で広く拾う（例：他人の占有する物を自己の支配下に移転）
+
+【出力形式】必ず以下のJSON形式で出力：
+{
+  "type": "greeting" | "direct" | "legal",
+  "queries": ["クエリ1", "クエリ2", "クエリ3"],
+  "greeting_response": "挨拶の場合のみ応答文"
+}
+
+- greeting: queries空配列、greeting_responseに応答
+- direct: queriesに元クエリのみ（1つ）
+- legal: queriesに3つのクエリ（original, legal, broad の順）
+
+JSON形式のみ出力。説明不要。`
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      console.error('⚠️ クエリ分類APIエラー');
+      return { type: 'legal', queries: [originalQuery] };
+    }
+
+    const data = await response.json();
+    const responseText = data.content[0].text.trim();
+    console.log('🔍 クエリ分類応答:', responseText);
+
+    // JSONパース（マークダウンコードブロックを除去）
+    try {
+      let jsonText = responseText;
+      // ```json ... ``` を除去
+      if (jsonText.includes('```')) {
+        jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      }
+      const parsed = JSON.parse(jsonText);
+      console.log(`📋 分類結果: ${parsed.type}`);
+      if (parsed.type === 'legal') {
+        console.log('🔄 生成クエリ:');
+        console.log('  - original:', parsed.queries[0]);
+        console.log('  - legal:', parsed.queries[1]);
+        console.log('  - broad:', parsed.queries[2]);
+      }
+      return parsed;
+    } catch (e) {
+      console.error('⚠️ JSONパースエラー:', e);
+      return { type: 'legal', queries: [originalQuery] };
+    }
+  } catch (err) {
+    console.error('⚠️ クエリ分類エラー:', err);
+    return { type: 'legal', queries: [originalQuery] };
+  }
+};
 
 // ===== 法令名・条文番号マッチング用ヘルパー =====
 
@@ -76,54 +174,6 @@ const extractArticleNumberFromTitle = (title) => {
   if (!title) return null;
   const match = title.match(/第([一二三四五六七八九十百千]+)条/);
   return match ? match[1] : null;
-};
-
-// ===== IndexedDB設定 =====
-const DB_NAME = 'LawDataDB';
-const DB_VERSION = 1;
-const STORE_NAME = 'lawChunks';
-
-// IndexedDBを開く
-const openDB = () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'chunk_id' });
-      }
-    };
-  });
-};
-
-// IndexedDBからデータ取得
-const getFromIndexedDB = async (chunkId) => {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME], 'readonly');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.get(chunkId);
-    
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-// IndexedDBにデータ保存
-const saveToIndexedDB = async (chunkId, data) => {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME], 'readwrite');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.put({ chunk_id: chunkId, data: data });
-    
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
 };
 
 // APIキー管理
@@ -293,7 +343,6 @@ export default function App() {
   const [processingStep, setProcessingStep] = useState('');
   const [progress, setProgress] = useState(0);
   const [expandedArticles, setExpandedArticles] = useState(new Set());
-  const [lawsIndex, setLawsIndex] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [tokenCount, setTokenCount] = useState(0);
@@ -302,12 +351,6 @@ export default function App() {
 
   // 最新の会話へのスクロール用ref
   const latestConversationRef = useRef(null);
-
-  const BM25_K1 = 1.2;
-  const BM25_B = 0.75;
-  const TITLE_BONUS = 15;
-  const CAPTION_BONUS = 8;
-  const LAW_NAME_BONUS = 5;
 
   const toggleArticleExpansion = (lawId, articleNumber) => {
     const key = `${lawId}-${articleNumber}`;
@@ -451,39 +494,9 @@ export default function App() {
   };
 
   const initialize = async () => {
-    try {
-      // 1. Embeddingモデル初期化（メモリ確保のため最初に）
-      setModelStatus('🧬 Embeddingモデルを読み込み中... (初回のみ3-5分)');
-      
-      embeddingPipeline = await pipeline(
-        'feature-extraction',
-        'Xenova/multilingual-e5-base',
-        { quantized: true }  // BASE版：軽量・ブラウザベース
-      );
-      
-      console.log('✅ Embeddingモデル初期化完了');
-
-      // 2. 法令インデックス読み込み（R2から）
-      setModelStatus('📚 法令インデックスを読み込み中...');
-      
-      try {
-        const R2_BASE_URL = 'https://pub-31e9c70796b94125976e0d215b8de3b1.r2.dev';
-        const indexResponse = await fetch(`${R2_BASE_URL}/laws_index_v2.json`);
-        const index = await indexResponse.json();
-        setLawsIndex(index);
-        console.log(`✅ ${index.total_laws}法令のインデックス読み込み完了`);
-      } catch (err) {
-        console.log('⚠️ インデックスファイルが見つかりません（JSONファイル準備中）');
-      }
-      
-      setModelLoading(false);
-      setModelStatus('✅ 準備完了！');
-      
-    } catch (err) {
-      console.error('初期化エラー:', err);
-      setError(`初期化に失敗: ${err.message}`);
-      setModelLoading(false);
-    }
+    // Worker側で検索するので、ブラウザ側での初期化は不要
+    setModelLoading(false);
+    setModelStatus('✅ 準備完了！');
   };
 
   // ===== Claude API呼び出し（安全版）=====
@@ -518,227 +531,11 @@ export default function App() {
     return data.content[0].text;
   };
 
-  // ===== クエリ適正化（並列検索用）=====
-  const optimizeQuery = async (originalQuery, conversationHistory = []) => {
-    const apiKey = getApiKey();
-    if (!apiKey) return null;
-
-    // 直近の会話履歴を文脈として追加（最大2件）
-    let contextText = '';
-    if (conversationHistory.length > 0) {
-      const recentConvs = conversationHistory.slice(-2);
-      contextText = '\n【直近の会話履歴】\n';
-      recentConvs.forEach(conv => {
-        contextText += `Q: ${conv.question}\n`;
-        // 回答は長いので最初の200文字だけ
-        const shortAnswer = conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer;
-        contextText += `A: ${shortAnswer}\n\n`;
-      });
-    }
-
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
-          max_tokens: 200,
-          messages: [{
-            role: 'user',
-            content: `以下のユーザーの質問を、法令検索に適した文章に書き換えてください。
-${contextText}
-【ユーザーの質問】
-${originalQuery}
-
-【ルール】
-- 「もう少し詳しく」「具体例は？」などの追加質問の場合、会話履歴から文脈を読み取り、具体的な検索クエリに変換する
-- 口語表現や概念的な表現を、法令条文で実際に使われている用語に変換する
-- 例：「届け出る」→「届出」、「財源規制」→「分配可能額」「剰余金」
-- 条文番号（第○条）は含めない
-- 法令名が特定できる場合はそのまま残す
-- 必要な法律用語は省略せず全て含める
-- 自然な文章として出力する
-
-【出力】
-書き換えた文章のみを出力してください。説明は不要です。`
-          }]
-        })
-      });
-
-      if (!response.ok) return null;
-      const data = await response.json();
-      const optimized = data.content[0].text.trim();
-      console.log('🔄 適正化クエリ:', optimized);
-
-      return optimized;
-    } catch (err) {
-      console.error('⚠️ クエリ適正化エラー:', err);
-      return null;
-    }
-  };
-
-  // ===== chunkファイル読み込み（IndexedDB対応）=====
-  const loadLawChunk = async (filename) => {
-    // IndexedDBチェック（エラー時はスキップ）
-    try {
-      const cachedData = await getFromIndexedDB(filename);
-      if (cachedData && cachedData.data) {
-        console.log(`💾 IndexedDBヒット: ${filename}`);
-        return cachedData.data;
-      }
-    } catch (e) {
-      console.log(`⚠️ IndexedDB読み込みスキップ: ${filename}`, e);
-    }
-    
-    console.log(`📥 ダウンロード中: ${filename}`);
-    
-    const R2_BASE_URL = 'https://pub-31e9c70796b94125976e0d215b8de3b1.r2.dev';
-    const response = await fetch(`${R2_BASE_URL}/${filename}`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    
-    const data = await response.json();
-    
-    // IndexedDBに保存（容量不足でも続行）
-    try {
-      await saveToIndexedDB(filename, data);
-      console.log(`💾 IndexedDBに保存: ${filename}`);
-    } catch (e) {
-      console.log(`⚠️ IndexedDB保存スキップ（容量不足？）: ${filename}`);
-    }
-    
-    return data;
-  };
-
-  // ===== Embedding生成 =====
-  const getQueryEmbedding = async (text) => {
-    if (!embeddingPipeline) {
-      throw new Error('Embeddingモデルが初期化されていません');
-    }
-    
-    // multilingual-e5モデルはquery用にprefixが必要
-    const prefixedText = `query: ${text}`;
-    
-    const output = await embeddingPipeline(prefixedText, {
-      pooling: 'mean',
-      normalize: true
-    });
-    
-    return Array.from(output.data);
-  };
-
-  // ===== コサイン類似度 =====
-  const cosineSimilarity = (vecA, vecB) => {
-    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-    let dotProduct = 0, normA = 0, normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-      dotProduct += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  };
-
-  // ===== BM25計算 =====
-  const calculateBM25 = (keyword, doc, docLength, avgDocLength, totalDocs, docsWithKeyword) => {
-    const tf = (doc.match(new RegExp(keyword, 'g')) || []).length;
-    const idf = Math.log((totalDocs - docsWithKeyword + 0.5) / (docsWithKeyword + 0.5) + 1);
-    return idf * ((tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * (docLength / avgDocLength))));
-  };
-
-  // ===== 複数クエリで同時検索（1回のchunk読み込みで両方処理）=====
-  const searchWithDualEmbeddings = async (originalEmbedding, optimizedEmbedding, lawName, articleNumbersKanji) => {
-    const EXACT_MATCH_BONUS = 0.50;
-    const LAW_NAME_MATCH_BONUS = 0.15;
-    const TOP_N = 20;
-
-    const dataChunks = lawsIndex.chunks.filter(c => c.filename.startsWith('laws_chunk_'));
-
-    // 両方の結果を保持するMap（キー: law_id-article_title）
-    const scoreMap = new Map();
-
-    for (const chunk of dataChunks) {
-      const chunkData = await loadLawChunk(chunk.filename);
-      await new Promise(resolve => setTimeout(resolve, 10));
-
-      for (const [lawId, lawData] of Object.entries(chunkData.laws)) {
-        if (!lawData.articles) continue;
-
-        for (const article of lawData.articles) {
-          if (!article.embedding || !Array.isArray(article.embedding)) continue;
-
-          const key = `${lawId}-${article.title}`;
-
-          // 元クエリのスコア計算
-          const originalSimilarity = cosineSimilarity(originalEmbedding, article.embedding);
-
-          let bonus = 0;
-          let matchType = '';
-          const lawNameMatched = lawName && lawData.law_title && lawData.law_title === lawName;
-          const articleTitleKanji = extractArticleNumberFromTitle(article.title);
-          const articleNumberMatched = articleNumbersKanji.length > 0 && articleTitleKanji && articleNumbersKanji.includes(articleTitleKanji);
-
-          if (lawNameMatched && articleNumberMatched) {
-            bonus = EXACT_MATCH_BONUS;
-            matchType = '🎯完全一致';
-          } else if (lawNameMatched) {
-            bonus = LAW_NAME_MATCH_BONUS;
-            matchType = '📘法令名一致';
-          }
-
-          const originalScore = originalSimilarity + bonus;
-
-          // 適正化クエリのスコア計算（あれば）
-          let optimizedScore = 0;
-          let sources = ['元クエリ'];
-
-          if (optimizedEmbedding) {
-            const optimizedSimilarity = cosineSimilarity(optimizedEmbedding, article.embedding);
-            optimizedScore = optimizedSimilarity; // 適正化はボーナスなし
-            sources.push('適正化');
-          }
-
-          const totalScore = originalScore + optimizedScore;
-
-          // Mapに追加または更新
-          if (!scoreMap.has(key) || scoreMap.get(key).score < totalScore) {
-            scoreMap.set(key, {
-              law: { law_title: lawData.law_title, law_id: lawId },
-              article: {
-                title: article.title,
-                content: article.content,
-                caption: article.caption,
-                paragraphs: article.paragraphs
-              },
-              similarity: Math.round(originalSimilarity * 1000) / 1000,
-              score: Math.round(totalScore * 1000) / 1000,
-              matchType: matchType,
-              sources: optimizedEmbedding ? sources : ['元クエリ']
-            });
-          }
-        }
-      }
-    }
-
-    // スコア順でソートしてTop N
-    const top20 = Array.from(scoreMap.values())
-      .sort((a, b) => b.score - a.score)
-      .slice(0, TOP_N);
-
-    return top20;
-  };
-
   // ===== 検索処理 =====
-  const handleSearch = async (searchQuery = null, options = {}) => {
+  const handleSearch = async (searchQuery = null) => {
     const actualQuery = (typeof searchQuery === 'string') ? searchQuery : query;
-    const { disableBonus = false } = options;
 
-    if (!actualQuery.trim() || !lawsIndex || modelLoading) return;
+    if (!actualQuery.trim() || modelLoading) return;
 
     if (!hasApiKey) {
       setError('APIキーが設定されていません。設定画面から入力してください。');
@@ -750,57 +547,69 @@ ${originalQuery}
     setError(null);
 
     try {
-      console.log('=== 🔍 並列検索開始 ===');
+      console.log('=== 🔍 検索開始 ===');
       console.log('📝 元クエリ:', actualQuery);
 
-      // クエリから法令名・条文番号を抽出
-      let lawName = null;
-      let articleNumbersKanji = [];
-      if (!disableBonus) {
-        const extracted = extractLawAndArticle(actualQuery);
-        lawName = extracted.lawName;
-        articleNumbersKanji = extracted.articleNumbersKanji;
-      }
-
-      // 【第1段階】Embedding生成 + クエリ適正化を並列実行
-      setProcessingStep('🧬 質問文を処理中...');
+      // 【第1段階】クエリ分類 & マルチクエリ生成
+      setProcessingStep('🧬 質問文を分析中...');
       setProgress(10);
 
-      const [queryEmbedding, optimizedQuery] = await Promise.all([
-        getQueryEmbedding(actualQuery),
-        optimizeQuery(actualQuery, conversations)
-      ]);
+      const queryResult = await classifyAndGenerateQueries(actualQuery, conversations);
+      console.log('📋 クエリ分類結果:', queryResult.type);
 
-      console.log('✅ 元クエリEmbedding生成完了');
-      console.log('🔄 適正化クエリ:', optimizedQuery || '(生成失敗)');
-
-      // 適正化クエリのEmbeddingも生成（適正化成功時のみ）
-      let optimizedEmbedding = null;
-      if (optimizedQuery && optimizedQuery !== actualQuery) {
-        setProcessingStep('🧬 適正化クエリをEmbedding化中...');
-        optimizedEmbedding = await getQueryEmbedding(optimizedQuery);
-        console.log('✅ 適正化クエリEmbedding生成完了');
+      // 挨拶の場合は検索スキップ
+      if (queryResult.type === 'greeting') {
+        console.log('👋 挨拶検出 - 検索スキップ');
+        const greetingResponse = queryResult.greeting_response || 'こんにちは！法令に関する質問があればお気軽にどうぞ。';
+        setConversations(prev => [...prev, {
+          question: actualQuery,
+          answer: greetingResponse,
+          articles: []
+        }]);
+        setQuery('');
+        setLoading(false);
+        return;
       }
 
-      // 【第2段階】検索実行（1回のchunk読み込みで両方処理）
+      // 【第2段階】Worker側でマルチクエリ検索実行（RRFランキング）
       setProcessingStep('📦 法令データを検索中...');
       setProgress(30);
 
-      const top20 = await searchWithDualEmbeddings(
-        queryEmbedding,
-        optimizedEmbedding,
-        lawName,
-        articleNumbersKanji
-      );
-      console.log('✅ 検索完了:', top20.length, '件');
+      // directの場合、クエリを漢数字形式に正規化（ベクトル検索の精度向上）
+      let searchQueries = queryResult.queries;
+      if (queryResult.type === 'direct') {
+        const extracted = extractLawAndArticle(actualQuery);
+        if (extracted.lawName && extracted.articleNumbersKanji.length > 0) {
+          // 「民法323条」→「民法 第三百二十三条」に変換
+          const normalizedQuery = `${extracted.lawName} 第${extracted.articleNumbersKanji[0]}条`;
+          searchQueries = [normalizedQuery];
+          console.log('📝 正規化クエリ:', normalizedQuery);
+        }
+      }
+
+      const searchResponse = await fetch(`${WORKER_URL}/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queries: searchQueries,  // マルチクエリ配列を送信
+          originalQuery: actualQuery,    // 元のクエリも送信（条番号抽出用）
+          topN: 20
+        })
+      });
+
+      if (!searchResponse.ok) {
+        throw new Error('検索に失敗しました');
+      }
+
+      const searchData = await searchResponse.json();
+      const top20 = searchData.results;
+      console.log('✅ 検索完了:', top20.length, '件 (RRFランキング)');
 
       setProgress(70);
 
-      console.log('🏆 最終Top20のスコア:');
+      console.log('🏆 Top20のスコア:');
       top20.forEach((item, i) => {
-        const sourceInfo = item.sources ? ` [${item.sources.join('+')}]` : '';
-        const bonusInfo = item.matchType ? ` ${item.matchType}` : '';
-        console.log(`  ${i + 1}. [${item.score}] ${item.law.law_title} ${item.article.title}${bonusInfo}${sourceInfo}`);
+        console.log(`  ${i + 1}. [${item.score.toFixed(4)}] ${item.law.law_title} ${item.article.title}`);
       });
 
       // 【第3段階】ClaudeにTop200を渡して最適な条文を選択・解説させる
@@ -814,9 +623,7 @@ ${originalQuery}
       // Top20の条文データを整形（スコア付き）
       let articleContext = '\n\n【候補条文データ（スコア順Top20）】\n';
       top20.forEach((item, index) => {
-        const matchInfo = item.matchType ? ` ${item.matchType}` : '';
-        const sourceInfo = item.sources && item.sources.length > 1 ? ' [両方でヒット]' : '';
-        articleContext += `\n${index + 1}. 【スコア: ${item.score}${matchInfo}${sourceInfo}】 ${item.law.law_title} ${item.article.title}`;
+        articleContext += `\n${index + 1}. 【スコア: ${item.score}】 ${item.law.law_title} ${item.article.title}`;
         if (item.article.caption) {
           articleContext += ` ${item.article.caption}`;
         }
@@ -850,9 +657,6 @@ ${articleContext}
 
 【重要な選択基準】
 - 候補条文は「スコア」の高い順に並んでいます
-- 「🎯完全一致」マークがある条文は、ユーザーが指定した法令名・条文番号と完全に一致しています。**最優先で選んでください**
-- 「📘法令名一致」マークがある条文は、ユーザーが指定した法令の条文です。優先的に選んでください
-- 「両方でヒット」マークがある条文は、元の質問と適正化した質問の両方で見つかった条文です。信頼度が高いため優先してください
 - スコアが高い条文は関連性が高いため、優先して選んでください
 - 上位10番以内の条文を優先してください
 - 条文タイトルだけでなく、条文の内容全体を見て判断してください
@@ -964,15 +768,15 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="max-w-2xl w-full bg-white rounded-lg shadow-lg p-8">
-          <img src="/joubun-kun/logo.png" alt="条文くん" className="h-40 mx-auto mb-6" />
-          
+          <img src="/joubun-kun/logo_B.png" alt="条文くん" className="h-24 mx-auto mb-6" />
+          <p className="text-gray-600 text-center mb-4">8,236法令・検索可能</p>
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
             <div className="flex items-center justify-center mb-4">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
             </div>
             <p className="text-blue-800 text-center text-sm">{modelStatus}</p>
             <p className="text-blue-600 text-center text-xs mt-2">
-              初回のみモデルをダウンロードします。2回目以降はキャッシュから即座に起動します。
+              法令データを読み込んでいます...
             </p>
           </div>
           
@@ -995,10 +799,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
           <div className="border-b border-gray-200 px-4 py-1">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <img src="/joubun-kun/logo.png" alt="条文くん" className="h-16" />
-                <p className="text-sm text-gray-600">
-                  {lawsIndex ? `${lawsIndex.total_laws}法令・検索可能` : 'データ準備中'}
-                </p>
+                <img src="/joubun-kun/logo_A.png" alt="条文くん" className="h-14" />
               </div>
               
               <div className="flex gap-3">
@@ -1018,12 +819,12 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
             <div className="flex-1 overflow-y-auto p-6">
               {conversations.length === 0 && (
                 <div className="text-center py-20">
-                  <img src="/joubun-kun/logo.png" alt="条文くん" className="h-48 mx-auto mb-4" />
+                  <img src="/joubun-kun/logo_B.png" alt="条文くん" className="h-32 mx-auto mb-4" />
                   <p className="text-gray-500 mb-6">法的な質問を入力してください</p>
                   <div className="text-sm text-gray-400 space-y-1">
-                    <div>💡 例：「手付金を放棄して契約解除したい」</div>
-                    <div>💡 例：「民法２３４条について教えて」</div>
-                    <div>💡 例：「会社設立の必要書類は？」</div>
+                    <div>💡 例：「手付金を放棄して契約解除できる？」</div>
+                    <div>💡 例：「株式会社の設立に必要な書類は？」</div>
+                    <div>💡 例：「民法の境界線についての規定を教えて」</div>
                   </div>
 
                   {/* 簡潔回答モード切替 */}

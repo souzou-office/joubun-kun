@@ -616,7 +616,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
       
       let claudeResponse;
       try {
-        claudeResponse = await callClaude(messages, 3000);
+        claudeResponse = await callClaude(messages, '', 3000);
         console.log('📥 Claude応答完了');
         console.log('📝 Claude生応答:', claudeResponse.substring(0, 500));
       } catch (apiError) {

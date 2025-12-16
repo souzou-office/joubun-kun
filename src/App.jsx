@@ -439,6 +439,13 @@ export default function App() {
     }
 
     const data = await response.json();
+    if (data.error) {
+      throw new Error(data.error);
+    }
+    if (!data.content || !data.content[0]) {
+      console.error('❌ 予期しないAPIレスポンス:', data);
+      throw new Error('APIからの応答が不正です');
+    }
     return data.content[0].text;
   };
 
@@ -1039,7 +1046,6 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
       {showSettings && <SettingsModal
         onClose={() => {
           setShowSettings(false);
-          checkApiKey();
           checkProMode();
         }}
         proMode={proMode}

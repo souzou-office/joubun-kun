@@ -577,7 +577,8 @@ export default function App() {
         setConversations(prev => [...prev, {
           question: actualQuery,
           answer: greetingResponse,
-          articles: []
+          articles: [],
+          timestamp: new Date()
         }]);
         setQuery('');
         setLoading(false);

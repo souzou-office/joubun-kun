@@ -575,9 +575,10 @@ export default function App() {
         console.log('👋 挨拶検出 - 検索スキップ');
         const greetingResponse = queryResult.greeting_response || 'こんにちは！法令に関する質問があればお気軽にどうぞ。';
         setConversations(prev => [...prev, {
+          id: Date.now(),
           question: actualQuery,
           answer: greetingResponse,
-          articles: [],
+          relevantArticles: [],
           timestamp: new Date()
         }]);
         setQuery('');

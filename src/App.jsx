@@ -9,64 +9,16 @@ const WORKER_URL = 'https://morning-surf-f117.ikeda-250.workers.dev';
 // ===== クエリ分類 & マルチクエリ生成 =====
 // 挨拶/条文直接指定/法的質問を分類し、必要に応じて3種類のクエリを生成
 const classifyAndGenerateQueries = async (originalQuery, conversationHistory = []) => {
-  const apiKey = getApiKey();
-  if (!apiKey) return { type: 'legal', queries: [originalQuery] };
-
-  // 直近の会話履歴を文脈として追加（最大2件）
-  let contextText = '';
-  if (conversationHistory.length > 0) {
-    const recentConvs = conversationHistory.slice(-2);
-    contextText = '\n【直近の会話履歴】\n';
-    recentConvs.forEach(conv => {
-      contextText += `Q: ${conv.question}\n`;
-      const shortAnswer = conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer;
-      contextText += `A: ${shortAnswer}\n\n`;
-    });
-  }
-
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch(`${WORKER_URL}/api/classify`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 500,
-        messages: [{
-          role: 'user',
-          content: `ユーザーの入力を分類し、検索クエリを生成してください。
-${contextText}
-【ユーザーの入力】
-${originalQuery}
-
-【分類ルール】
-1. "greeting" - 挨拶・雑談（こんにちは、ありがとう、さようなら等）→ 検索不要
-2. "direct" - 条文直接指定（民法709条、会社法423条等）→ 元クエリのみで検索
-3. "legal" - 法的な質問 → 3種類のクエリを生成
-
-【クエリ生成ルール（legalの場合のみ）】
-3種類の異なる視点でクエリを生成：
-- original: ユーザーの言葉をできるだけ残し、検索ノイズ（「教えて」等）だけ除去
-- legal: 法令条文で使われる厳密な法律用語に変換（例：財布取った→窃取、他人の財物）
-- broad: 抽象的・状況的な表現で広く拾う（例：他人の占有する物を自己の支配下に移転）
-
-【出力形式】必ず以下のJSON形式で出力：
-{
-  "type": "greeting" | "direct" | "legal",
-  "queries": ["クエリ1", "クエリ2", "クエリ3"],
-  "greeting_response": "挨拶の場合のみ応答文"
-}
-
-- greeting: queries空配列、greeting_responseに応答
-- direct: queriesに元クエリのみ（1つ）
-- legal: queriesに3つのクエリ（original, legal, broad の順）
-
-JSON形式のみ出力。説明不要。`
-        }]
+        query: originalQuery,
+        conversationHistory: conversationHistory.slice(-2).map(conv => ({
+          question: conv.question,
+          answer: conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer
+        }))
       })
     });
 
@@ -75,30 +27,15 @@ JSON形式のみ出力。説明不要。`
       return { type: 'legal', queries: [originalQuery] };
     }
 
-    const data = await response.json();
-    const responseText = data.content[0].text.trim();
-    console.log('🔍 クエリ分類応答:', responseText);
-
-    // JSONパース（マークダウンコードブロックを除去）
-    try {
-      let jsonText = responseText;
-      // ```json ... ``` を除去
-      if (jsonText.includes('```')) {
-        jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-      }
-      const parsed = JSON.parse(jsonText);
-      console.log(`📋 分類結果: ${parsed.type}`);
-      if (parsed.type === 'legal') {
-        console.log('🔄 生成クエリ:');
-        console.log('  - original:', parsed.queries[0]);
-        console.log('  - legal:', parsed.queries[1]);
-        console.log('  - broad:', parsed.queries[2]);
-      }
-      return parsed;
-    } catch (e) {
-      console.error('⚠️ JSONパースエラー:', e);
-      return { type: 'legal', queries: [originalQuery] };
+    const parsed = await response.json();
+    console.log(`📋 分類結果: ${parsed.type}`);
+    if (parsed.type === 'legal') {
+      console.log('🔄 生成クエリ:');
+      console.log('  - original:', parsed.queries[0]);
+      console.log('  - legal:', parsed.queries[1]);
+      console.log('  - broad:', parsed.queries[2]);
     }
+    return parsed;
   } catch (err) {
     console.error('⚠️ クエリ分類エラー:', err);
     return { type: 'legal', queries: [originalQuery] };
@@ -189,11 +126,9 @@ const extractArticleNumberFromTitle = (title) => {
   return match ? match[1] : null;
 };
 
-// APIキー管理
-const API_KEY_STORAGE = 'joubun_claude_api_key';
+// プロモード設定
 const PRO_MODE_STORAGE = 'joubun_pro_mode';
 
-// プロモード管理
 const saveProMode = (enabled) => {
   localStorage.setItem(PRO_MODE_STORAGE, enabled ? 'true' : 'false');
 };
@@ -208,11 +143,8 @@ const TOKEN_LIMIT = 200000;
 // トークン数推定（日本語は1文字≒2-3トークン、英語は1単語≒1トークン）
 const estimateTokens = (text) => {
   if (!text) return 0;
-  // 日本語文字数
   const japaneseChars = (text.match(/[\u3000-\u9fff\uff00-\uffef]/g) || []).length;
-  // その他（英数字など）
   const otherChars = text.length - japaneseChars;
-  // 日本語は2トークン/文字、英数字は0.25トークン/文字として概算
   return Math.ceil(japaneseChars * 2 + otherChars * 0.25);
 };
 
@@ -224,18 +156,6 @@ const calculateConversationTokens = (conversations) => {
     total += estimateTokens(conv.answer);
   }
   return total;
-};
-
-const saveApiKey = (key) => {
-  localStorage.setItem(API_KEY_STORAGE, key);
-};
-
-const getApiKey = () => {
-  return localStorage.getItem(API_KEY_STORAGE) || '';
-};
-
-const deleteApiKey = () => {
-  localStorage.removeItem(API_KEY_STORAGE);
 };
 
 // AI解説テキストを見やすくフォーマット
@@ -357,7 +277,6 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [expandedArticles, setExpandedArticles] = useState(new Set());
   const [showSettings, setShowSettings] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState(false);
   const [tokenCount, setTokenCount] = useState(0);
   const [isTokenLimitReached, setIsTokenLimitReached] = useState(false);
   const [proMode, setProMode] = useState(false);
@@ -378,7 +297,6 @@ export default function App() {
 
   // ===== 初期化 =====
   useEffect(() => {
-    checkApiKey();
     checkProMode();
     initialize();
   }, []);
@@ -497,11 +415,6 @@ export default function App() {
     }
   }, [conversations]);
 
-  const checkApiKey = () => {
-    const key = getApiKey();
-    setHasApiKey(key.length > 0);
-  };
-
   const checkProMode = () => {
     setProMode(getProMode());
   };
@@ -512,27 +425,12 @@ export default function App() {
     setModelStatus('✅ 準備完了！');
   };
 
-  // ===== Claude API呼び出し（安全版）=====
-  const callClaude = async (messages, maxTokens = 2000) => {
-    const apiKey = getApiKey();
-    
-    if (!apiKey) {
-      throw new Error('APIキーが設定されていません');
-    }
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+  // ===== Claude API呼び出し（Worker経由）=====
+  const callClaude = async (messages, system = '', maxTokens = 2000) => {
+    const response = await fetch(`${WORKER_URL}/api/chat`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: maxTokens,
-        messages: messages
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, system })
     });
 
     if (!response.ok) {
@@ -549,12 +447,6 @@ export default function App() {
     const actualQuery = (typeof searchQuery === 'string') ? searchQuery : query;
 
     if (!actualQuery.trim() || modelLoading) return;
-
-    if (!hasApiKey) {
-      setError('APIキーが設定されていません。設定画面から入力してください。');
-      setShowSettings(true);
-      return;
-    }
 
     setLoading(true);
     setError(null);
@@ -895,7 +787,7 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
                           <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl px-5 py-3 shadow-md">
                             <p className="leading-relaxed">{conv.question}</p>
                             <p className="text-xs text-blue-100 mt-2 text-right">
-                              {conv.timestamp.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                              {conv.timestamp?.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) || ''}
                             </p>
                           </div>
                           <div className="flex-shrink-0 w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-600 text-sm font-bold">
@@ -1159,93 +1051,29 @@ CRITICAL: 必ず有効なJSON形式で回答してください。マークダウ
 
 // ===== 設定モーダルコンポーネント =====
 function SettingsModal({ onClose, proMode, setProMode }) {
-  const [apiKey, setApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [message, setMessage] = useState(null);
   const [localProMode, setLocalProMode] = useState(proMode);
-
-  useEffect(() => {
-    const key = getApiKey();
-    if (key) {
-      setApiKey(key);
-    }
-  }, []);
+  const [message, setMessage] = useState(null);
 
   const handleSave = () => {
-    if (!apiKey.trim()) {
-      setMessage({ type: 'error', text: 'APIキーを入力してください' });
-      return;
-    }
-
-    if (!apiKey.startsWith('sk-ant-')) {
-      setMessage({ type: 'error', text: '無効なAPIキー形式です' });
-      return;
-    }
-
-    saveApiKey(apiKey);
     saveProMode(localProMode);
     setProMode(localProMode);
     setMessage({ type: 'success', text: '設定を保存しました' });
     setTimeout(() => {
       onClose();
-    }, 1500);
-  };
-
-  const handleDelete = () => {
-    if (!confirm('APIキーを削除しますか？')) return;
-    
-    deleteApiKey();
-    setApiKey('');
-    setMessage({ type: 'success', text: 'APIキーを削除しました' });
+    }, 1000);
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 p-6">
+      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-gray-900">⚙️ 設定</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
         </div>
 
         <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Claude APIキー</label>
-            <div className="space-y-2">
-              <div className="relative">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-ant-api03-..."
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <button
-                  onClick={() => setShowKey(!showKey)}
-                  className="absolute right-3 top-2.5 text-gray-500 hover:text-gray-700"
-                >
-                  {showKey ? '🙈' : '👁️'}
-                </button>
-              </div>
-              <p className="text-xs text-gray-500">
-                APIキーはlocalStorageに保存されます（ブラウザから確認可能）
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h3 className="font-semibold text-blue-900 mb-2">📘 APIキーの取得方法</h3>
-            <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
-              <li>
-                <a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer"
-                   className="underline hover:text-blue-600">Anthropic Console</a> にアクセス
-              </li>
-              <li>「API Keys」→「Create Key」</li>
-              <li>生成されたキーをコピーして上記に貼り付け</li>
-            </ol>
-          </div>
-
           {/* 簡潔回答モード設定 */}
-          <div className="border-t pt-4">
+          <div>
             <div className="flex items-center justify-between">
               <div>
                 <label className="block text-sm font-medium text-gray-700">簡潔回答モード</label>
@@ -1270,7 +1098,7 @@ function SettingsModal({ onClose, proMode, setProMode }) {
 
           {message && (
             <div className={`p-4 rounded-lg ${
-              message.type === 'success' 
+              message.type === 'success'
                 ? 'bg-green-50 border border-green-200 text-green-800'
                 : 'bg-red-50 border border-red-200 text-red-800'
             }`}>
@@ -1278,21 +1106,12 @@ function SettingsModal({ onClose, proMode, setProMode }) {
             </div>
           )}
 
-          <div className="flex gap-3">
-            <button
-              onClick={handleSave}
-              className="flex-1 py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              💾 保存
-            </button>
-            <button
-              onClick={handleDelete}
-              disabled={!apiKey}
-              className="px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
-            >
-              🗑️ 削除
-            </button>
-          </div>
+          <button
+            onClick={handleSave}
+            className="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            💾 保存
+          </button>
         </div>
       </div>
     </div>

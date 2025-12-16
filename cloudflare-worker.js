@@ -418,6 +418,123 @@ export default {
       }
     }
 
+    // クエリ分類API（Claude経由）
+    if (url.pathname === '/api/classify') {
+      try {
+        const { query, conversationHistory } = await request.json();
+        const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
+
+        if (!CLAUDE_API_KEY) {
+          return new Response(JSON.stringify({ error: 'CLAUDE_API_KEY not configured' }), {
+            status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // 会話履歴から文脈を構築
+        let contextText = '';
+        if (conversationHistory && conversationHistory.length > 0) {
+          const recentConvs = conversationHistory.slice(-2);
+          contextText = '\n【直近の会話履歴】\n';
+          recentConvs.forEach(conv => {
+            contextText += `Q: ${conv.question}\n`;
+            const shortAnswer = conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer;
+            contextText += `A: ${shortAnswer}\n\n`;
+          });
+        }
+
+        const classifyPrompt = `あなたはユーザーの入力を分類するアシスタントです。
+
+入力を以下の3種類に分類してください：
+1. "greeting" - 挨拶や雑談（こんにちは、ありがとう、など）
+2. "direct" - 特定の法令条文を直接参照（「民法709条」「会社法423条」など）
+3. "legal" - 法的な質問や相談
+
+${contextText}
+【ユーザー入力】
+${query}
+
+以下のJSON形式で回答してください（他の文章は不要）：
+{
+  "type": "greeting" | "direct" | "legal",
+  "queries": ["検索クエリ1", "検索クエリ2", "検索クエリ3"],  // legalの場合のみ3つのクエリを生成
+  "greeting_response": "挨拶への返答"  // greetingの場合のみ
+}
+
+注意：
+- directの場合、queriesには入力をそのまま1つだけ入れてください
+- legalの場合、queriesには3つの異なる検索クエリを生成してください
+- greetingの場合、queriesは空配列、greeting_responseに返答を入れてください`;
+
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 500,
+            messages: [{ role: 'user', content: classifyPrompt }]
+          })
+        });
+
+        const data = await response.json();
+        const text = data.content?.[0]?.text || '{}';
+
+        // JSONを抽出
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { type: 'legal', queries: [query] };
+
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // チャットAPI（Claude経由）
+    if (url.pathname === '/api/chat') {
+      try {
+        const { messages, system } = await request.json();
+        const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
+
+        if (!CLAUDE_API_KEY) {
+          return new Response(JSON.stringify({ error: 'CLAUDE_API_KEY not configured' }), {
+            status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 2000,
+            system: system || '',
+            messages: messages
+          })
+        });
+
+        const data = await response.json();
+
+        return new Response(JSON.stringify(data), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     return new Response('Not Found', { status: 404, headers: corsHeaders });
   }
 };

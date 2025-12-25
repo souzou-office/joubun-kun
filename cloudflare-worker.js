@@ -1,5 +1,6 @@
 // Cloudflare Workers - 法令検索API（Vectorize版 + R2バインディング）
 // https://morning-surf-f117.ikeda-250.workers.dev/
+// Version: 2025-12-23-v2 (refs split by law_id)
 
 const EXACT_MATCH_BONUS = 2.0;
 const LAW_NAME_MATCH_BONUS = 0.15;
@@ -31,6 +32,9 @@ const COMMON_LAW_IDS = {
   '消費者契約法': '412AC0000000061',
   '個人情報保護法': '415AC0000000057',
   '個人情報の保護に関する法律': '415AC0000000057',
+  '租税特別措置法': '332AC0000000026',
+  '租税特別措置法施行令': '332CO0000000043',
+  '租税特別措置法施行規則': '332M50000040015',
 };
 
 // 単一の法令+条文を抽出（後方互換用）
@@ -179,20 +183,28 @@ export default {
           // 検索結果に目的の条文があるかチェック
           let found = false;
           let foundLawId = null;
+          let foundLawIdPartial = null;  // 部分一致のlaw_id（フォールバック用）
           for (const [key] of rrfScores.entries()) {
             const meta = metadataCache.get(key);
-            if (meta && meta.law_title && meta.law_title.includes(info.lawName)) {
-              // この法令の法令IDを保存（後で使う可能性あり）
-              if (!foundLawId) foundLawId = meta.law_id;
-              if (meta.article_title === artTitle) {
-                found = true;
-                break;
+            if (meta && meta.law_title) {
+              // 完全一致を優先
+              if (meta.law_title === info.lawName) {
+                foundLawId = meta.law_id;
+                if (meta.article_title === artTitle) {
+                  found = true;
+                  break;
+                }
+              } else if (meta.law_title.includes(info.lawName) && !foundLawIdPartial) {
+                // 部分一致はフォールバックとして保存
+                foundLawIdPartial = meta.law_id;
               }
             }
           }
+          // 完全一致が見つからなければ部分一致を使用
+          if (!foundLawId) foundLawId = foundLawIdPartial;
 
-          // 検索結果からIDが見つからなければCOMMON_LAW_IDSを参照
-          if (!foundLawId && COMMON_LAW_IDS[info.lawName]) {
+          // COMMON_LAW_IDSに登録されていれば優先的に使用（Vectorizeのデータが壊れている場合の対策）
+          if (COMMON_LAW_IDS[info.lawName]) {
             foundLawId = COMMON_LAW_IDS[info.lawName];
           }
 
@@ -211,8 +223,13 @@ export default {
         // ボーナス適用（複数条文対応・枝番対応）
         const scoreMap = new Map();
         for (const [key, rrfScore] of rrfScores.entries()) {
-          const metadata = metadataCache.get(key);
+          const metadata = { ...metadataCache.get(key) }; // 浅いコピー
           let bonus = 0, matchType = null;
+
+          // law_titleからCOMMON_LAW_IDSでlaw_idを修正（Vectorizeのデータ不整合対策）
+          if (metadata.law_title && COMMON_LAW_IDS[metadata.law_title]) {
+            metadata.law_id = COMMON_LAW_IDS[metadata.law_title];
+          }
 
           // 複数の指定条文それぞれに対してチェック
           for (const info of multipleLawInfos) {
@@ -345,12 +362,70 @@ export default {
           await Promise.all(kaishahoPromises);
         }
 
+        // LARGE法令（条文単位ファイルから取得）- LARGE と LARGE_075 両方に対応
+        // 注意: sortedEntriesにはダミー追加された条文も含まれるので、すべて取得対象にする
+        const largeLawArticles = new Map(); // lawId -> Set of articleTitles
+        for (const entry of sortedEntries) {
+          const lawId = entry.metadata.law_id;
+          if (lawId === MINPO_ID || lawId === KAISHAHO_ID) continue;
+          const chunkInfo = lawChunkMap[lawId];
+          if (chunkInfo === 'LARGE' || chunkInfo === 'LARGE_075') {
+            if (!largeLawArticles.has(lawId)) {
+              largeLawArticles.set(lawId, new Set());
+            }
+            largeLawArticles.get(lawId).add(entry.metadata.article_title);
+          }
+        }
+        // SetをArrayに変換
+        for (const [lawId, titles] of largeLawArticles.entries()) {
+          largeLawArticles.set(lawId, [...titles]);
+        }
+
+        // LARGE法令の条文を個別に取得（v2形式: articles配列）
+        const largeLawFetchLog = [];
+        const largeLawPromises = [...largeLawArticles.entries()].map(async ([lawId, articleTitles]) => {
+          const articlePromises = articleTitles.map(async (articleTitle) => {
+            const r2Key = `large_law_articles_v2/${lawId}/${articleTitle}.json`;
+            try {
+              const obj = await env.R2.get(r2Key);
+              if (!obj) {
+                largeLawFetchLog.push({ r2Key, status: 'not_found' });
+                return null;
+              }
+              const data = await obj.json();
+              largeLawFetchLog.push({ r2Key, status: 'ok', articlesCount: data.articles?.length });
+              return data;
+            } catch (e) {
+              largeLawFetchLog.push({ r2Key, status: 'error', error: e.message });
+              return null;
+            }
+          });
+
+          const results = await Promise.all(articlePromises);
+          for (const data of results) {
+            if (!data) continue;
+            if (!lawDataCache[lawId]) {
+              lawDataCache[lawId] = {
+                law_id: data.law_id,
+                law_title: data.law_title,
+                law_num: data.law_num,
+                articles: []
+              };
+            }
+            // articles配列をすべて追加
+            lawDataCache[lawId].articles.push(...data.articles);
+          }
+        });
+        await Promise.all(largeLawPromises);
+
         // 他の法令（軽量版チャンクから取得）
         const neededChunks = new Set();
         for (const lawId of uniqueLawIds) {
           if (lawId === MINPO_ID || lawId === KAISHAHO_ID) continue;
-          if (lawChunkMap[lawId] !== undefined) {
-            const firstChunk = Array.isArray(lawChunkMap[lawId]) ? lawChunkMap[lawId][0] : lawChunkMap[lawId];
+          const chunkInfo = lawChunkMap[lawId];
+          if (chunkInfo === 'LARGE' || chunkInfo === 'LARGE_075') continue; // LARGE法令はスキップ
+          if (chunkInfo !== undefined) {
+            const firstChunk = Array.isArray(chunkInfo) ? chunkInfo[0] : chunkInfo;
             neededChunks.add(firstChunk);
           }
         }
@@ -393,7 +468,22 @@ export default {
           };
         });
 
-        return new Response(JSON.stringify({ results, total_searched: scoreMap.size }), {
+        // デバッグ用
+        const sortedArticleTitles = sortedEntries
+          .filter(e => e.metadata.law_id === '332M50000040015')
+          .map(e => e.metadata.article_title);
+        const resultsArticleTitles = results
+          .filter(r => r.law.law_id === '332M50000040015')
+          .map(r => r.article.title);
+        const debugInfo = {
+          sortedEntriesCount: sortedEntries.length,
+          resultsCount: results.length,
+          sortedArticleTitlesFor332M: sortedArticleTitles,
+          resultsArticleTitlesFor332M: resultsArticleTitles,
+          largeLawArticleTitles: largeLawArticles.get('332M50000040015') || [],
+          largeLawFetchLogCount: largeLawFetchLog.length
+        };
+        return new Response(JSON.stringify({ results, total_searched: scoreMap.size, debug: debugInfo }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
 
@@ -404,7 +494,36 @@ export default {
       }
     }
 
+    // デバッグ: R2ファイルを直接取得
+    if (url.pathname === '/debug-r2') {
+      try {
+        const { lawId, articleTitle } = await request.json();
+        const r2Key = `large_law_articles_v2/${lawId}/${articleTitle}.json`;
+        const obj = await env.R2.get(r2Key);
+        if (!obj) {
+          return new Response(JSON.stringify({ r2Key, status: 'not_found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        // JSONとしてパースせず、テキストとして最初の200文字を返す
+        const text = await obj.text();
+        return new Response(JSON.stringify({ r2Key, status: 'ok', textLength: text.length, textPreview: text.slice(0, 200) }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message, stack: e.stack?.slice(0, 200) }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     if (url.pathname === '/' || url.pathname === '/embed') {
+      // GETリクエストの場合はステータスを返す
+      if (request.method === 'GET') {
+        return new Response(JSON.stringify({ status: 'ok', message: '条文くんAPI' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
       try {
         const { text } = await request.json();
         const embedding = await env.AI.run('@cf/baai/bge-m3', { text: text });
@@ -526,6 +645,332 @@ ${query}
         const data = await response.json();
 
         return new Response(JSON.stringify(data), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // 条文取得API（条文IDから条文内容を取得）
+    if (url.pathname === '/api/articles') {
+      try {
+        const { articleIds } = await request.json();
+        // articleIds: ["417AC0000000086_Art453", "129AC0000000089_Art415", ...]
+
+        if (!articleIds || !Array.isArray(articleIds)) {
+          return new Response(JSON.stringify({ error: 'articleIds array is required' }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // 条文IDをパース: law_id と article_title に分解
+        const parsedArticles = articleIds.map(id => {
+          const match = id.match(/^(.+?)_(Art(\d+)(?:_(\d+))?)$/);
+          if (!match) return null;
+          const lawId = match[1];
+          const mainNum = parseInt(match[3], 10);
+          const subNum = match[4] ? parseInt(match[4], 10) : null;
+          // 条文タイトルを漢数字形式に変換
+          let articleTitle = '第' + numberToKanji(mainNum) + '条';
+          if (subNum) articleTitle += 'の' + numberToKanji(subNum);
+          return { lawId, articleTitle, originalId: id };
+        }).filter(Boolean);
+
+        // 法令IDごとにグループ化
+        const articlesByLaw = new Map();
+        for (const art of parsedArticles) {
+          if (!articlesByLaw.has(art.lawId)) articlesByLaw.set(art.lawId, []);
+          articlesByLaw.get(art.lawId).push(art);
+        }
+
+        // law_chunk_map を取得
+        const mapObj = await env.R2.get('law_chunk_map.json');
+        const lawChunkMap = await mapObj.json();
+
+        const results = [];
+
+        // 民法の範囲定義
+        const MINPO_ID = '129AC0000000089';
+        const MINPO_RANGES = [
+          { sub: 1, min: 1, max: 246 },
+          { sub: 2, min: 247, max: 408 },
+          { sub: 3, min: 409, max: 545 },
+          { sub: 4, min: 546, max: 724 },
+          { sub: 5, min: 725, max: 892 },
+          { sub: 6, min: 893, max: 1044 },
+          { sub: 7, min: 1045, max: 1050 }
+        ];
+
+        // 会社法の範囲定義
+        const KAISHAHO_ID = '417AC0000000086';
+        const KAISHAHO_RANGES = [
+          { chunk: 76, min: 1, max: 178 },
+          { chunk: 100, min: 179, max: 327 },
+          { chunk: 101, min: 328, max: 449 },
+          { chunk: 102, min: 450, max: 574 },
+          { chunk: 103, min: 575, max: 702 },
+          { chunk: 104, min: 703, max: 821 },
+          { chunk: 105, min: 822, max: 979 }
+        ];
+
+        // 各法令の条文を取得
+        for (const [lawId, articles] of articlesByLaw.entries()) {
+          const chunkInfo = lawChunkMap[lawId];
+
+          // 民法の場合
+          if (lawId === MINPO_ID) {
+            for (const art of articles) {
+              const match = art.articleTitle.match(/第([一二三四五六七八九十百千]+)条/);
+              if (!match) continue;
+              const artNum = kanjiToNumber(match[1]);
+              const range = MINPO_RANGES.find(r => artNum >= r.min && artNum <= r.max);
+              if (!range) continue;
+              try {
+                const obj = await env.R2.get(`laws_chunk_286_${range.sub}_light.json`);
+                if (obj) {
+                  const data = await obj.json();
+                  const lawData = data.laws[MINPO_ID];
+                  const foundArticle = lawData?.articles?.find(a => a.title === art.articleTitle);
+                  if (foundArticle) {
+                    results.push({ id: art.originalId, law_id: lawId, law_title: lawData.law_title, article: foundArticle });
+                  }
+                }
+              } catch (e) { }
+            }
+            continue;
+          }
+
+          // 会社法の場合
+          if (lawId === KAISHAHO_ID || chunkInfo === 'KAISHAHO') {
+            for (const art of articles) {
+              const match = art.articleTitle.match(/第([一二三四五六七八九十百千]+)条/);
+              if (!match) continue;
+              const artNum = kanjiToNumber(match[1]);
+              const range = KAISHAHO_RANGES.find(r => artNum >= r.min && artNum <= r.max);
+              if (!range) continue;
+              try {
+                const chunkName = 'laws_chunk_' + String(range.chunk).padStart(3, '0') + '_light.json';
+                const obj = await env.R2.get(chunkName);
+                if (obj) {
+                  const data = await obj.json();
+                  const lawData = data.laws[KAISHAHO_ID];
+                  const foundArticle = lawData?.articles?.find(a => a.title === art.articleTitle);
+                  if (foundArticle) {
+                    results.push({ id: art.originalId, law_id: lawId, law_title: lawData.law_title, article: foundArticle });
+                  }
+                }
+              } catch (e) { }
+            }
+            continue;
+          }
+
+          if (!chunkInfo) continue;
+
+          let lawData = null;
+
+          // LARGE法令の場合は条文単位ファイルから取得
+          if (chunkInfo === 'LARGE' || chunkInfo === 'LARGE_075') {
+            for (const art of articles) {
+              try {
+                const r2Key = `large_law_articles_v2/${lawId}/${art.articleTitle}.json`;
+                const obj = await env.R2.get(r2Key);
+                if (obj) {
+                  const data = await obj.json();
+                  const foundArticle = data.articles?.find(a => a.title === art.articleTitle);
+                  if (foundArticle) {
+                    results.push({
+                      id: art.originalId,
+                      law_id: lawId,
+                      law_title: data.law_title,
+                      article: foundArticle
+                    });
+                  }
+                }
+              } catch (e) { }
+            }
+          } else {
+            // 通常チャンクから取得
+            const chunkNum = Array.isArray(chunkInfo) ? chunkInfo[0] : chunkInfo;
+            const chunkName = 'laws_chunk_' + String(chunkNum).padStart(3, '0') + '_light.json';
+            try {
+              const chunkObj = await env.R2.get(chunkName);
+              if (chunkObj) {
+                const chunkData = await chunkObj.json();
+                lawData = chunkData.laws[lawId];
+              }
+            } catch (e) { }
+
+            if (lawData) {
+              for (const art of articles) {
+                const foundArticle = lawData.articles?.find(a => a.title === art.articleTitle);
+                if (foundArticle) {
+                  results.push({
+                    id: art.originalId,
+                    law_id: lawId,
+                    law_title: lawData.law_title,
+                    article: foundArticle
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({ results }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // 参照条文API（refs/reverse_refs取得）
+    if (url.pathname === '/api/refs') {
+      try {
+        const { articles } = await request.json();
+        // articles: [{ law_id, article_title }, ...]
+
+        if (!articles || !Array.isArray(articles)) {
+          return new Response(JSON.stringify({ error: 'articles array is required' }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // 条文タイトルをArtキーに変換（例: 第七百九条 → Art709）
+        const titleToArtKey = (lawId, title) => {
+          // 「第X条」「第X条のY」形式を「lawId_ArtX」「lawId_ArtX_Y」に変換
+          const match = title.match(/第([一二三四五六七八九十百千]+)条(?:の([一二三四五六七八九十]+))?/);
+          if (!match) return null;
+          const mainNum = kanjiToNumber(match[1]);
+          const subNum = match[2] ? kanjiToNumber(match[2]) : null;
+          const artPart = subNum ? `Art${mainNum}_${subNum}` : `Art${mainNum}`;
+          return `${lawId}_${artPart}`;
+        };
+
+        // 法令IDごとにグループ化
+        const lawIds = [...new Set(articles.map(a => a.law_id))];
+
+        // refs_chunks形式: まずインデックスを取得して、必要なチャンクを特定
+        const refsDataByLaw = {};
+        const fetchErrors = [];
+
+        // インデックスファイルを取得
+        let refsIndex = {};
+        try {
+          const indexObj = await env.R2.get('refs_chunks/refs_index.json');
+          if (indexObj) {
+            refsIndex = JSON.parse(await indexObj.text());
+          }
+        } catch (e) {
+          fetchErrors.push({ type: 'index', error: e.message });
+        }
+
+        // 必要なチャンク番号を特定
+        const neededChunks = new Set();
+        for (const lawId of lawIds) {
+          const chunkNum = refsIndex[lawId];
+          if (chunkNum !== undefined) {
+            neededChunks.add(chunkNum);
+          }
+        }
+
+        // チャンクを取得
+        const chunkDataMap = {};
+        await Promise.all([...neededChunks].map(async (chunkNum) => {
+          const r2Key = `refs_chunks/refs_chunk_${String(chunkNum).padStart(3, '0')}.json`;
+          try {
+            const chunkObj = await env.R2.get(r2Key);
+            if (chunkObj) {
+              chunkDataMap[chunkNum] = JSON.parse(await chunkObj.text());
+            }
+          } catch (e) {
+            fetchErrors.push({ chunkNum, r2Key, error: e.message });
+          }
+        }));
+
+        // 法令IDごとにデータを抽出
+        for (const lawId of lawIds) {
+          const chunkNum = refsIndex[lawId];
+          if (chunkNum !== undefined && chunkDataMap[chunkNum] && chunkDataMap[chunkNum][lawId]) {
+            refsDataByLaw[lawId] = chunkDataMap[chunkNum][lawId];
+          } else {
+            refsDataByLaw[lawId] = { refs: {}, reverse_refs: {} };
+          }
+        }
+
+        if (fetchErrors.length > 0) {
+          console.log('Refs fetch errors:', JSON.stringify(fetchErrors));
+        }
+
+        // 各条文のrefs/reverse_refsを取得
+        const results = [];
+        for (const article of articles) {
+          const fullKey = titleToArtKey(article.law_id, article.article_title);
+          const lawData = refsDataByLaw[article.law_id] || { refs: {}, reverse_refs: {} };
+
+          const articleRefs = {
+            law_id: article.law_id,
+            article_title: article.article_title,
+            refs: [],
+            reverse_refs: []
+          };
+
+          if (fullKey) {
+            // この条文が参照している条文
+            if (lawData.refs[fullKey]) {
+              articleRefs.refs = lawData.refs[fullKey];
+            }
+            // この条文を参照している条文
+            if (lawData.reverse_refs[fullKey]) {
+              articleRefs.reverse_refs = lawData.reverse_refs[fullKey];
+            }
+          }
+
+          results.push(articleRefs);
+        }
+
+        return new Response(JSON.stringify({ results }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          error: error.message,
+          stack: error.stack,
+          name: error.name
+        }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // デバッグ: refs test endpoint
+    if (url.pathname === '/debug/refs-test') {
+      try {
+        const lawId = '417AC0000000086';
+        const r2Key = `refs/${lawId}.json`;
+        const refsObj = await env.R2.get(r2Key);
+
+        if (!refsObj) {
+          return new Response(JSON.stringify({ error: 'File not found', r2Key }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const text = await refsObj.text();
+        const size = text.length;
+        const preview = text.substring(0, 200);
+        let isValid = false;
+        try {
+          JSON.parse(text);
+          isValid = true;
+        } catch (e) {}
+
+        return new Response(JSON.stringify({ size, preview, isValid }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       } catch (error) {

@@ -1176,8 +1176,8 @@ export default function App() {
           question: actualQuery,
           answer: greetingResponse,
           relevantArticles: [],
-          refsMap: refsMap,
-        timestamp: new Date()
+          refsMap: {},
+          timestamp: new Date()
         }]);
         setQuery('');
         setLoading(false);

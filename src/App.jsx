@@ -1138,7 +1138,8 @@ export default function App() {
 
     const data = await response.json();
     if (data.error) {
-      throw new Error(data.error);
+      const errorMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+      throw new Error(errorMsg);
     }
     if (!data.content || !data.content[0]) {
       console.error('❌ 予期しないAPIレスポンス:', data);

@@ -294,3 +294,332 @@ R2:
 - `scripts/split_refs.cjs` - refs.json を法令ID単位に分割
 - `scripts/upload_refs_parallel.cjs` - refs ファイルを R2 に並列アップロード
 - `scripts/upload_all_refs.cjs` - refs ファイルを R2 にアップロード（逐次版）
+
+---
+
+## 2025-12-26 セッション
+
+### 実装した機能
+
+#### 1. refs_chunks形式への移行
+
+**問題**: refs を法令ID単位で分割すると5,679個のファイルになり管理が煩雑
+
+**解決策**: サイズベースのチャンク分割（約1MB単位）に変更
+
+**実装内容**:
+
+1. **refs データの再分割**
+   - 5,679個の個別ファイル → 25個の1MBチャンク + 1個のインデックスファイル
+   - スクリプト: `scripts/split_refs_by_size.cjs`
+
+2. **R2 へのアップロード**
+   ```
+   refs_chunks/
+   ├── refs_chunk_000.json  # ~1MB
+   ├── refs_chunk_001.json
+   ├── ...
+   ├── refs_chunk_024.json  # 計25チャンク
+   └── refs_index.json      # 法令ID → チャンク番号のマップ
+   ```
+   - スクリプト: `scripts/upload_refs_chunks.cjs`
+
+3. **Worker の `/api/refs` エンドポイント更新**
+   ```javascript
+   // 1. インデックスファイルを取得
+   const indexObj = await env.R2.get('refs_chunks/refs_index.json');
+   refsIndex = JSON.parse(await indexObj.text());
+
+   // 2. 必要なチャンク番号を特定
+   const neededChunks = new Set();
+   for (const lawId of lawIds) {
+     const chunkNum = refsIndex[lawId];
+     if (chunkNum !== undefined) neededChunks.add(chunkNum);
+   }
+
+   // 3. 必要なチャンクのみ並列取得
+   await Promise.all([...neededChunks].map(async (chunkNum) => {
+     const r2Key = `refs_chunks/refs_chunk_${String(chunkNum).padStart(3, '0')}.json`;
+     const chunkObj = await env.R2.get(r2Key);
+     if (chunkObj) chunkDataMap[chunkNum] = JSON.parse(await chunkObj.text());
+   }));
+   ```
+
+#### 2. 全法令IDマッピング（8,878件）
+
+**問題**: `COMMON_LAW_IDS` に主要法令のみ登録していたため、マイナー法令でID解決できない
+
+**解決策**: 全法令のマッピングファイルを生成
+
+**実装内容**:
+
+1. **`src/lawIds.js` を新規作成**
+   - output_v2/laws_chunk_*_light.json から全法令を抽出
+   - 8,878件の法令名 → 法令ID マッピング
+   - ファイルサイズ: 約1MB（gzip後282KB）
+
+2. **App.jsx での使用**
+   ```javascript
+   import { ALL_LAW_IDS } from './lawIds.js';
+   const COMMON_LAW_IDS = ALL_LAW_IDS;
+   ```
+
+#### 3. 言及条文のみ表示するUI改善
+
+**変更前**: 検索ヒット条文 + refs条文 + 言及条文をすべて表示
+**変更後**: Claude説明文で言及された条文のみ表示
+
+**実装内容**:
+
+1. **正規表現パターンの拡張**
+   ```javascript
+   const mentionPatterns = [
+     // 【法令名 第X条】形式（アラビア数字・複数の「の」対応）
+     /【([^】]+?(?:法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)(?:第[0-9一二三四五六七八九十]+項)?】/g,
+     // 法令名 第X条 形式（スペースなし対応）
+     /(?:^|[（(「『\s])([^\s（(「『【】）)」』]+?(?:法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)/gm
+   ];
+   ```
+
+2. **アラビア数字 → 漢数字変換**
+   ```javascript
+   function arabicToKanji(str) {
+     const map = { '0': '〇', '1': '一', '2': '二', ... };
+     return str.replace(/[0-9]/g, d => map[d] || d);
+   }
+   ```
+
+3. **条文リンククリック時のlaw_id解決**
+   ```javascript
+   lawId: COMMON_LAW_IDS[lawName] || null  // 法令名からIDを解決
+   ```
+
+### ファイル構成（追加・変更分）
+
+```
+src/
+├── App.jsx          # UI改善・全法令ID対応
+└── lawIds.js        # 新規: 8,878件の法令マッピング
+
+refs_chunks/         # 新規ディレクトリ
+├── refs_chunk_000.json ~ refs_chunk_024.json  # 25チャンク
+└── refs_index.json  # インデックス
+
+R2:
+├── refs_chunks/
+│   ├── refs_chunk_000.json ~ refs_chunk_024.json
+│   └── refs_index.json
+```
+
+### 処理フロー（最終版）
+
+```
+1. クエリ分類・マルチクエリ生成
+2. Vectorize検索（Top20取得）
+3. 【Claude 1回目】条文選定（5件程度）
+4. refs/reverse_refs 取得（R2 refs_chunks形式）
+5. 参照先条文の内容取得（R2）
+6. 【Claude 2回目】説明文生成（選定条文 + 参照条文情報込み）
+7. 説明文から言及条文を抽出（正規表現 - アラビア数字対応）
+8. 言及条文をVectorize検索で取得
+9. 言及条文のみサイドバーに表示
+```
+
+### 追加したスクリプト
+
+- `scripts/split_refs_by_size.cjs` - refs を1MBチャンクに分割
+- `scripts/upload_refs_chunks.cjs` - refs_chunks を R2 にアップロード
+
+### デプロイ情報
+
+- **フロントエンド**: https://joubun-kun.pages.dev
+- **Worker API**: https://morning-surf-f117.ikeda-250.workers.dev
+
+### Git コミット
+
+```
+0bb26e0 refs機能追加・全法令IDマッピング・UI改善
+```
+
+---
+
+## 2025-12-26 セッション（続き）
+
+### sub_items（イ、ロ、ハ等）対応
+
+#### 問題
+条文の「号」の下にある「イ、ロ、ハ」などのサブ項目が表示されていなかった
+
+#### 原因
+XMLからJSONへの変換時に `<Subitem1>`, `<Subitem2>` などの要素が `sub_items` として抽出されていなかった
+
+#### 解決策
+
+1. **全チャンクのアップグレード処理**
+   - R2から309個のlightファイルをバックアップ（`r2_backup_20251226/`）
+   - XMLから `Subitem1`, `Subitem2`, `Subitem3` を再抽出
+   - `scripts/upgrade_all_chunks.py` で並列処理（8ワーカー）
+   - 結果: 270成功、37スキップ、1エラー（空ファイル）
+
+2. **R2へのアップロード**
+   - `scripts/upload_upgraded_to_r2.cjs` で306ファイルをアップロード
+   - 1ファイル失敗（chunk_000は元から空）
+
+3. **フロントエンド対応**（前回セッションで実装済み）
+   - `sub_items` の再帰的表示
+   - 色分け: 青（号）、緑（イロハ）、オレンジ（(1)(2)）
+
+#### 動作確認
+
+```
+不動産登記規則 第百十八条
+├── Item 1: 一
+│   └── sub_items: 4個
+│       ├── イ
+│       ├── ロ
+│       ├── ハ
+│       └── ニ
+```
+
+### Observability（ログ機能）有効化
+
+#### 実装内容
+
+1. **wrangler.jsonc 作成**
+   ```json
+   {
+     "name": "morning-surf-f117",
+     "main": "cloudflare-worker.js",
+     "compatibility_date": "2024-01-01",
+     "observability": {
+       "enabled": true,
+       "logs": {
+         "enabled": true,
+         "persist": true,
+         "invocation_logs": true
+       }
+     },
+     "vectorize": [...],
+     "r2_buckets": [...],
+     "ai": { "binding": "AI" }
+   }
+   ```
+
+2. **トークン使用量ログ追加**
+   ```javascript
+   // cloudflare-worker.js
+   if (data.usage) {
+     console.log(`[Claude /classify] input: ${data.usage.input_tokens}, output: ${data.usage.output_tokens}`);
+   }
+   if (data.usage) {
+     console.log(`[Claude /api/chat] input: ${data.usage.input_tokens}, output: ${data.usage.output_tokens}`);
+   }
+   ```
+
+### コスト分析
+
+#### 1回の検索あたりのトークン使用量（実測値）
+
+| 呼び出し | 入力 | 出力 | 用途 |
+|---------|------|------|------|
+| /api/classify | 350-770 | 60-70 | クエリ分類 |
+| /api/chat (1回目) | 4,000-7,000 | 17-23 | 条文選定 |
+| /api/chat (2回目) | 1,700-2,900 | 400-640 | 説明文生成 |
+| **合計** | **約7,000-10,000** | **約500-700** | |
+
+#### コスト計算（Claude Sonnet 4）
+
+- 入力: $3 / 100万トークン
+- 出力: $15 / 100万トークン
+- **1回の検索: 約4-6円**
+- 月1,000回: 約5,000円
+
+#### 入力トークンの変動要因
+
+1. **質問の長さ** → classify入力に影響
+2. **ヒット条文の長さ** → 条文選定入力に影響
+3. **選定条文・参照条文の量** → 説明文生成入力に影響
+4. **会話履歴の累積** → 説明文生成入力に影響（質問＋回答のみ、条文全文は含まない）
+
+### 追加したファイル
+
+- `wrangler.jsonc` - Workerの設定ファイル（observability含む）
+- `scripts/upgrade_all_chunks.py` - 全チャンクのsub_items再抽出
+- `scripts/upload_upgraded_to_r2.cjs` - アップグレード済みファイルのR2アップロード
+- `r2_backup_20251226/` - R2データのバックアップ（309ファイル）
+- `r2_upgraded/` - アップグレード済みファイル（307ファイル）
+
+---
+
+## 2025-12-30 セッション
+
+### 解決した問題
+
+#### 1. R2データの法令ID不整合問題
+
+**症状**: 電子署名及び認証業務に関する法律などが参照条文に表示されない
+
+**原因**:
+- 2025-12-26のsub_items対応で `r2_backup_20251226` を基にアップグレードした
+- しかし `r2_backup_20251226` 自体に法令IDの不整合があった
+- 例: chunk_065で電子署名法（412AC0000000102）が欠落
+- `output_v2` には正しいデータがあったが、R2には反映されていなかった
+
+**解決策**:
+
+1. **output_v2の全チャンクをR2に再アップロード**
+   - `scripts/upload_all_output_v2.cjs` で280個のチャンクをアップロード
+   - 275個成功、5個失敗（巨大ファイル: 069, 072, 073, 074, 075）
+   - 失敗した069, 072, 073, 074は `r2_backup_20251226` からアップロード（適切なサイズ）
+   - chunk_075はサブチャンク（075_1〜075_65）が既にアップロード済み
+
+2. **アップロード結果**
+   ```
+   output_v2から: 275個（電子署名法含むchunk_065など）
+   r2_backupから: 4個（069, 072, 073, 074）
+   chunk_075: サブチャンク65個が既存
+   ```
+
+#### 2.「法律」で終わる法令名が認識されない問題
+
+**症状**: 「電子署名及び認証業務に関する法律」が説明文でクリック可能にならない、参照条文に表示されない
+
+**原因**:
+- 正規表現が `(法|令|規則|規程)` のみにマッチ
+- 「法律」で終わる法令名（電子署名及び認証業務に関する法律など）がマッチしない
+
+**解決策**:
+
+`src/App.jsx` の正規表現を修正:
+
+1. **formatExplanation内のパターン**
+   ```javascript
+   // Before
+   /【([^】]+?)(法|令|規則|規程)\s*(第...)】/g
+
+   // After
+   /【([^】]+?)(法律|法|令|規則|規程)\s*(第...)】/g
+   ```
+
+2. **mentionPatterns**
+   ```javascript
+   // Before
+   /【([^】]+?(?:法|令|規則|規程))\s*第...】/g
+
+   // After
+   /【([^】]+?(?:法律|法|令|規則|規程))\s*第...】/g
+   ```
+
+3. **referenceMap / lastSeen / invalidLawNames**
+   - `法律` 用のエントリを追加
+   - `同法律`, `本法律`, `前法律` を無効な法令名として追加
+
+### 追加したスクリプト
+
+- `scripts/upload_all_output_v2.cjs` - output_v2の全チャンクをR2にアップロード
+
+### 教訓
+
+- **正規のデータソースを一元管理する**: `output_v2` が正しいデータ
+- **バックアップからのアップグレードは危険**: `r2_backup` のデータに問題があると、それが引き継がれる
+- **アップロード時はoutput_v2を基準にする**

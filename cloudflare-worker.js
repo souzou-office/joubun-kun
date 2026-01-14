@@ -35,12 +35,16 @@ const COMMON_LAW_IDS = {
   '租税特別措置法': '332AC0000000026',
   '租税特別措置法施行令': '332CO0000000043',
   '租税特別措置法施行規則': '332M50000040015',
+  '特定受託事業者に係る取引の適正化等に関する法律': '505AC0000000025',
+  '特定受託事業者に係る取引の適正化等に関する法律施行令': '506CO0000000200',
+  'フリーランス保護法': '505AC0000000025',
+  'フリーランス新法': '505AC0000000025',
 };
 
 // 単一の法令+条文を抽出（後方互換用）
 function extractLawInfo(query) {
   const result = { lawName: null, articleNum: null };
-  const lawPatterns = [/^(.+?法)/, /(.+?法)(?:第|の)/];
+  const lawPatterns = [/^(.+?法律)/, /^(.+?法)/, /(.+?法律)(?:第|の)/, /(.+?法)(?:第|の)/];
   for (const pattern of lawPatterns) {
     const match = query.match(pattern);
     if (match) { result.lawName = match[1]; break; }
@@ -58,21 +62,23 @@ function normalizeNumbers(str) {
   return str.replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
 }
 
-// 複数の法令+条文を抽出（「著作権法121条と民法323条」「民法42条の2」のようなクエリ対応）
+// 複数の法令+条文を抽出（「著作権法121条と民法323条」「民法42条の2」「租税特別措置法70条の2の4」のようなクエリ対応）
 function extractMultipleLawInfos(query) {
   const results = [];
   // 全角数字を半角に正規化
   const normalizedQuery = normalizeNumbers(query);
-  // 「〇〇法XXX条」または「〇〇法XXX条のY」のパターンを全て抽出
-  // 枝番（の二、の2）にも対応
-  const pattern = /([\u4e00-\u9fff]+(?:法|令|規則|条例))[\s]*(?:第)?(\d+|[一二三四五六七八九十百千]+)条(?:の(\d+|[一二三四五六七八九十]+))?/g;
+  // 「〇〇法XXX条」または「〇〇法XXX条のYのZ...」のパターンを全て抽出
+  // 複数の枝番（の二の四、の2の4等）にも対応
+  // 注: ひらがな・カタカナを含む法令名にも対応 (例: 「特定受託事業者に係る取引の適正化等に関する法律」)
+  const pattern = /([\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ffー]+(?:施行規則|施行令|法律|規則|条例|新法|法|令))[\s]*(?:第)?(\d+|[一二三四五六七八九十百千]+)条((?:の(?:\d+|[一二三四五六七八九十]+))*)/g;
   let match;
   while ((match = pattern.exec(normalizedQuery)) !== null) {
     const lawName = match[1];
     const numStr = match[2];
     const articleNum = /^\d+$/.test(numStr) ? parseInt(numStr, 10) : kanjiToNumber(numStr);
-    const subNum = match[3] ? (/^\d+$/.test(match[3]) ? parseInt(match[3], 10) : kanjiToNumber(match[3])) : null;
-    results.push({ lawName, articleNum, subNum });
+    // 枝番部分（「の二の四」等）をそのまま保持
+    const subNumsStr = match[3] || '';  // 例: "の二の四"
+    results.push({ lawName, articleNum, subNumsStr });
   }
   return results;
 }
@@ -124,6 +130,9 @@ export default {
 
     if (url.pathname === '/search') {
       try {
+        const timings = {};
+        const startTotal = Date.now();
+
         const { query, queries, originalQuery, topN = 20 } = await request.json();
 
         // queries配列があればマルチクエリモード、なければ従来モード
@@ -141,12 +150,14 @@ export default {
         const expectedArticleTitle = lawInfo.articleNum ? '第' + numberToKanji(lawInfo.articleNum) + '条' : null;
 
         // 各クエリで並列検索
+        const startVectorize = Date.now();
         const searchPromises = searchQueries.map(async (q) => {
           const embeddingResult = await env.AI.run('@cf/baai/bge-m3', { text: [q] });
           const queryVector = embeddingResult.data[0];
           return env.VECTORIZE.query(queryVector, { topK: 50, returnMetadata: 'all' });
         });
         const allResults = await Promise.all(searchPromises);
+        timings.vectorize = Date.now() - startVectorize;
 
         // RRF (Reciprocal Rank Fusion) でランキング統合
         const rrfScores = new Map();
@@ -165,10 +176,16 @@ export default {
           });
         });
 
-        // 条文タイトルを生成するヘルパー関数（枝番対応）
+        // 条文タイトルを生成するヘルパー関数（複数枝番対応）
         const buildArticleTitle = (info) => {
           let title = '第' + numberToKanji(info.articleNum) + '条';
-          if (info.subNum) {
+          // subNumsStr（「の二の四」等）をそのまま追加、またはアラビア数字を漢数字に変換
+          if (info.subNumsStr) {
+            // アラビア数字が含まれていれば漢数字に変換
+            const converted = info.subNumsStr.replace(/の(\d+)/g, (m, num) => 'の' + numberToKanji(parseInt(num, 10)));
+            title += converted;
+          } else if (info.subNum) {
+            // 後方互換: 旧形式のsubNum
             title += 'の' + numberToKanji(info.subNum);
           }
           return title;
@@ -256,6 +273,7 @@ export default {
         const uniqueLawIds = [...new Set(sortedEntries.map(e => e.metadata.law_id))];
         
         // R2バインディングを使用（CDNキャッシュを回避）
+        const startR2 = Date.now();
         const mapObj = await env.R2.get('law_chunk_map.json');
         const lawChunkMap = await mapObj.json();
 
@@ -316,16 +334,16 @@ export default {
         }
 
         // 会社法（複数チャンクに分散: 076, 100, 101, 102, 103, 104, 105）
-        // 条文番号範囲: 076(1-178), 100(179-327), 101(328-449), 102(450-574), 103(575-702), 104(703-821), 105(822-979)
+        // 条文番号範囲: 076(1-178), 100(179-317), 101(318-449), 102(450-662), 103(663-801), 104(802-966), 105(967-979)
         const KAISHAHO_ID = '417AC0000000086';
         const KAISHAHO_RANGES = [
           { chunk: 76, min: 1, max: 178 },
-          { chunk: 100, min: 179, max: 327 },
-          { chunk: 101, min: 328, max: 449 },
-          { chunk: 102, min: 450, max: 574 },
-          { chunk: 103, min: 575, max: 702 },
-          { chunk: 104, min: 703, max: 821 },
-          { chunk: 105, min: 822, max: 979 }
+          { chunk: 100, min: 179, max: 317 },
+          { chunk: 101, min: 318, max: 449 },
+          { chunk: 102, min: 450, max: 662 },
+          { chunk: 103, min: 663, max: 801 },
+          { chunk: 104, min: 802, max: 966 },
+          { chunk: 105, min: 967, max: 979 }
         ];
 
         if (articlesByLaw.has(KAISHAHO_ID)) {
@@ -483,7 +501,11 @@ export default {
           largeLawArticleTitles: largeLawArticles.get('332M50000040015') || [],
           largeLawFetchLogCount: largeLawFetchLog.length
         };
-        return new Response(JSON.stringify({ results, total_searched: scoreMap.size, debug: debugInfo }), {
+        timings.r2_fetch = Date.now() - startR2;
+        timings.total = Date.now() - startTotal;
+        console.log('[/search timings]', JSON.stringify(timings));
+
+        return new Response(JSON.stringify({ results, total_searched: scoreMap.size, debug: debugInfo, timings }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
 
@@ -540,6 +562,7 @@ export default {
     // クエリ分類API（Claude経由）
     if (url.pathname === '/api/classify') {
       try {
+        const startTime = Date.now();
         const { query, conversationHistory } = await request.json();
         const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
 
@@ -592,7 +615,7 @@ ${query}
             'anthropic-version': '2023-06-01'
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-haiku-4-5-20251001',  // クエリ分類は高速なHaikuを使用
             max_tokens: 500,
             messages: [{ role: 'user', content: classifyPrompt }]
           })
@@ -604,6 +627,10 @@ ${query}
         // JSONを抽出
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { type: 'legal', queries: [query] };
+
+        const elapsed = Date.now() - startTime;
+        console.log(`[/api/classify] ${elapsed}ms`);
+        result._timing = elapsed;
 
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -617,6 +644,50 @@ ${query}
 
     // チャットAPI（Claude経由）
     if (url.pathname === '/api/chat') {
+      try {
+        const startTime = Date.now();
+        const { messages, system } = await request.json();
+        const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
+
+        if (!CLAUDE_API_KEY) {
+          return new Response(JSON.stringify({ error: 'CLAUDE_API_KEY not configured' }), {
+            status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5-20250929',
+            max_tokens: 2000,
+            system: system || '',
+            messages: messages
+          })
+        });
+
+        const data = await response.json();
+
+        const elapsed = Date.now() - startTime;
+        console.log(`[/api/chat] ${elapsed}ms`);
+        data._timing = elapsed;
+
+        return new Response(JSON.stringify(data), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ストリーミングチャットAPI（Claude経由）
+    if (url.pathname === '/api/chat-stream') {
       try {
         const { messages, system } = await request.json();
         const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
@@ -635,17 +706,29 @@ ${query}
             'anthropic-version': '2023-06-01'
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-5-20250929',
             max_tokens: 2000,
+            stream: true,
             system: system || '',
             messages: messages
           })
         });
 
-        const data = await response.json();
+        if (!response.ok) {
+          const errorText = await response.text();
+          return new Response(JSON.stringify({ error: errorText }), {
+            status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
 
-        return new Response(JSON.stringify(data), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        // ストリーミングレスポンスをそのまま転送
+        return new Response(response.body, {
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+          }
         });
       } catch (error) {
         return new Response(JSON.stringify({ error: error.message }), {
@@ -687,6 +770,7 @@ ${query}
         }
 
         // law_chunk_map を取得
+        const startR2 = Date.now();
         const mapObj = await env.R2.get('law_chunk_map.json');
         const lawChunkMap = await mapObj.json();
 
@@ -708,12 +792,12 @@ ${query}
         const KAISHAHO_ID = '417AC0000000086';
         const KAISHAHO_RANGES = [
           { chunk: 76, min: 1, max: 178 },
-          { chunk: 100, min: 179, max: 327 },
-          { chunk: 101, min: 328, max: 449 },
-          { chunk: 102, min: 450, max: 574 },
-          { chunk: 103, min: 575, max: 702 },
-          { chunk: 104, min: 703, max: 821 },
-          { chunk: 105, min: 822, max: 979 }
+          { chunk: 100, min: 179, max: 317 },
+          { chunk: 101, min: 318, max: 449 },
+          { chunk: 102, min: 450, max: 662 },
+          { chunk: 103, min: 663, max: 801 },
+          { chunk: 104, min: 802, max: 966 },
+          { chunk: 105, min: 967, max: 979 }
         ];
 
         // 各法令の条文を取得

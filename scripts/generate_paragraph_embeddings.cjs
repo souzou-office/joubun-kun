@@ -214,10 +214,10 @@ async function main() {
       if (li > 0) await safeWrite(',');
       await safeWrite(JSON.stringify(lawId) + ':{');
 
-      // 法令データの各フィールドを個別に書き込む
-      await safeWrite('"law_title":' + JSON.stringify(lawData.law_title || ''));
-      await safeWrite(',"law_id":' + JSON.stringify(lawData.law_id || ''));
-      if (lawData.law_num) await safeWrite(',"law_num":' + JSON.stringify(lawData.law_num));
+      // 法令データの各フィールドを個別に書き込む（小さいチャンクと同じ順序）
+      await safeWrite('"law_id":' + JSON.stringify(lawData.law_id || lawId));
+      await safeWrite(',"law_num":' + JSON.stringify(lawData.law_num || ''));
+      await safeWrite(',"law_title":' + JSON.stringify(lawData.law_title || ''));
 
       // articles配列を個別に書き込む
       if (lawData.articles && lawData.articles.length > 0) {

@@ -1,0 +1,30 @@
+{
+  "name": "morning-surf-f117",
+  "main": "cloudflare-worker.js",
+  "compatibility_date": "2024-01-01",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    }
+  },
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "law-embeddings"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "joubun-kun-data"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  }
+}

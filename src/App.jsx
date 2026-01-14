@@ -427,6 +427,57 @@ const formatExplanation = (text, onArticleClick) => {
     .replace(/^#\s+/gm, ' ')
     .trim();
 
+  // 「同法」「本法」などを直前の法令名に置き換える前処理
+  // 最後に出現した法令名を記録しながら順番に置き換え
+  const referenceMap = {
+    '同法': '法', '本法': '法',
+    '同法律': '法律', '本法律': '法律',
+    '同令': '令', '本令': '令',
+    '同規則': '規則', '本規則': '規則',
+    '同規程': '規程', '本規程': '規程'
+  };
+
+  // 最後に見た各種法令名を記録
+  const lastSeen = { '法': null, '法律': null, '令': null, '規則': null, '規程': null };
+
+  // テキストを文字単位でスキャンして置き換え
+  const allPattern = /【([^】]+?)(法律|法|令|規則|規程)\s*(第[一二三四五六七八九十百千0-9]+条(?:の[一二三四五六七八九十0-9]+)*)】/g;
+  let result = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = allPattern.exec(cleanText)) !== null) {
+    // マッチ前のテキストを追加
+    result += cleanText.slice(lastIndex, match.index);
+
+    const fullLawName = match[1] + match[2]; // 例: "民" + "法" = "民法"
+    const suffix = match[2]; // 法、令、規則、規程
+    const articleNum = match[3];
+
+    // 「同法」「本法」などかチェック
+    const refKey = match[1] + match[2]; // "同法", "本法" など
+    if (referenceMap[refKey]) {
+      // 直前の法令名で置き換え
+      const actualLaw = lastSeen[suffix];
+      if (actualLaw) {
+        result += `【${actualLaw} ${articleNum}】`;
+      } else {
+        // 見つからない場合はそのまま
+        result += match[0];
+      }
+    } else {
+      // 通常の法令名 → 記録して出力
+      lastSeen[suffix] = fullLawName;
+      result += match[0];
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // 残りのテキストを追加
+  result += cleanText.slice(lastIndex);
+  cleanText = result;
+
   const paragraphs = cleanText.split('\n').filter(p => p.trim());
 
   return paragraphs.map((paragraph, index) => {
@@ -440,10 +491,14 @@ const formatExplanation = (text, onArticleClick) => {
 
     // 条文番号をクリッカブルなボタンに（太字変換より先に処理）
     // すべてのパターンを1つの関数で処理して重複マッチを防ぐ
+    // 「法律」で終わる法令名にも対応（電子署名及び認証業務に関する法律など）
     content = content.replace(
-      /(\*\*)?【(\*\*)?([^】*]+?)(\*\*)?\s*(第[一二三四五六七八九十百千0-9]+条(?:の[一二三四五六七八九十0-9]+)?)】(\*\*)?/g,
-      (match, preBold, innerBoldStart, lawName, innerBoldEnd, articleNum, postBold) => {
-        return `<button class="article-link inline-block font-bold text-blue-700 bg-blue-100 px-3 py-1 rounded-lg border-2 border-blue-300 mx-1 shadow-sm hover:bg-blue-200 hover:border-blue-400 cursor-pointer transition-colors" data-law="${lawName.trim()}" data-article="${articleNum}">【${lawName.trim()} ${articleNum}】</button>`;
+      /(\*\*)?【(\*\*)?([^】*]+?(?:法律|法|令|規則|規程))(\*\*)?\s*(第[一二三四五六七八九十百千0-9]+条(?:の[一二三四五六七八九十0-9]+)*)(?:[（(]([^）)]+)[）)])?】(\*\*)?/g,
+      (match, preBold, innerBoldStart, lawName, innerBoldEnd, articleNum, caption, postBold) => {
+        const trimmedLawName = lawName.trim();
+        // captionがあれば表示に含める（ただしdata属性には含めない）
+        const displayText = caption ? `【${trimmedLawName} ${articleNum}（${caption}）】` : `【${trimmedLawName} ${articleNum}】`;
+        return `<button class="article-link inline-block font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border sm:border-2 border-blue-300 mx-0.5 shadow-sm hover:bg-blue-200 hover:border-blue-400 cursor-pointer transition-colors text-sm sm:text-base" data-law="${trimmedLawName}" data-article="${articleNum}">${displayText}</button>`;
       }
     );
 
@@ -470,44 +525,44 @@ const formatExplanation = (text, onArticleClick) => {
       const number = isNumberedList[1];
       const text = isNumberedList[2];
       return (
-        <div key={index} className="flex items-start gap-3 mb-4 ml-2">
-          <span className="flex-shrink-0 w-7 h-7 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold">{number}</span>
-          <p className="text-gray-800 leading-7 flex-1 pt-0.5 text-base" dangerouslySetInnerHTML={{ __html: text }} />
+        <div key={index} className="flex items-start gap-2 mb-2 ml-1">
+          <span className="flex-shrink-0 w-5 h-5 sm:w-6 sm:h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold">{number}</span>
+          <p className="text-gray-800 leading-5 sm:leading-6 flex-1 pt-0.5 text-sm sm:text-base" dangerouslySetInnerHTML={{ __html: text }} />
         </div>
       );
     }
-    
+
     if (isBulletList) {
       return (
-        <div key={index} className="flex items-start gap-3 mb-3 ml-4">
-          <span className="text-blue-600 font-bold">•</span>
-          <p className="text-gray-800 leading-7 flex-1 text-base" dangerouslySetInnerHTML={{ __html: content.replace(/^[・•]\s/, '') }} />
+        <div key={index} className="flex items-start gap-2 mb-2 ml-2">
+          <span className="text-blue-600 font-bold text-sm">•</span>
+          <p className="text-gray-800 leading-5 sm:leading-6 flex-1 text-sm sm:text-base" dangerouslySetInnerHTML={{ __html: content.replace(/^[・•]\s/, '') }} />
         </div>
       );
     }
-    
+
     // 見出し
     const isHeading = paragraph.length < 40 && (
-      paragraph.endsWith('：') || 
-      paragraph.endsWith(':') || 
+      paragraph.endsWith('：') ||
+      paragraph.endsWith(':') ||
       paragraph.match(/^【.+】$/)
     );
-    
+
     if (isHeading) {
       return (
-        <h4 key={index} className="font-bold text-gray-900 mt-4 mb-2 text-base border-l-4 border-blue-600 pl-3 bg-blue-50 py-1.5" dangerouslySetInnerHTML={{ __html: content }} />
+        <h4 key={index} className="font-bold text-gray-900 mt-3 mb-1 text-sm sm:text-base border-l-4 border-blue-600 pl-2 bg-blue-50 py-1" dangerouslySetInnerHTML={{ __html: content }} />
       );
     }
-    
+
     // セクション区切り
     const isSectionStart = /^(まず|次に|また|さらに|最後に|ただし|なお|具体的には)、?/.test(paragraph);
-    
+
     if (isSectionStart) {
       return (
-        <p key={index} className="text-gray-800 leading-7 mb-4 mt-4 pl-3 border-l-2 border-blue-400 bg-blue-50 py-2 pr-2 text-base" dangerouslySetInnerHTML={{ __html: content }} />
+        <p key={index} className="text-gray-800 leading-5 sm:leading-6 mb-2 mt-3 pl-2 border-l-2 border-blue-400 bg-blue-50 py-1.5 pr-2 text-sm sm:text-base" dangerouslySetInnerHTML={{ __html: content }} />
       );
     }
-    
+
     // 重要な結論・制約
     const isImportantConclusion =
       /^(したがって|よって|つまり|結論として|以上より|重要|注意)、?/.test(paragraph) ||
@@ -523,18 +578,18 @@ const formatExplanation = (text, onArticleClick) => {
         .replace(/hover:bg-blue-200/g, 'hover:bg-amber-200')
         .replace(/hover:border-blue-400/g, 'hover:border-amber-500');
       return (
-        <div key={index} className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-5 my-5">
-          <div className="flex items-start gap-3">
-            <span className="text-2xl">⚠️</span>
-            <p className="text-gray-900 leading-7 font-semibold text-base flex-1" dangerouslySetInnerHTML={{ __html: yellowContent }} />
+        <div key={index} className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-3 my-3">
+          <div className="flex items-start gap-2">
+            <span className="text-lg sm:text-xl">⚠️</span>
+            <p className="text-gray-900 leading-5 sm:leading-6 font-semibold text-sm sm:text-base flex-1" dangerouslySetInnerHTML={{ __html: yellowContent }} />
           </div>
         </div>
       );
     }
-    
+
     // 通常の段落
     return (
-      <p key={index} className="text-gray-800 leading-7 mb-4 text-base" dangerouslySetInnerHTML={{ __html: content }} />
+      <p key={index} className="text-gray-800 leading-5 sm:leading-6 mb-2 text-sm sm:text-base" dangerouslySetInnerHTML={{ __html: content }} />
     );
   });
 };
@@ -825,7 +880,30 @@ export default function App() {
 
     return parts;
   };
-  
+
+  // ハイライト情報を使ってテキストにハイライトを適用する関数
+  const applyHighlights = (text, highlights, lawTitle, articleTitle) => {
+    if (!highlights || highlights.length === 0) return text;
+
+    // この条文に対するハイライトを探す
+    const articleHighlights = highlights.filter(h =>
+      h.law === lawTitle && h.article === articleTitle
+    );
+
+    if (articleHighlights.length === 0) return text;
+
+    let result = text;
+    for (const h of articleHighlights) {
+      if (h.text && h.text.length > 5) {
+        // 部分一致でハイライト（前後の文字も考慮）
+        const escapedText = h.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${escapedText})`, 'g');
+        result = result.replace(regex, '<mark class="bg-yellow-200 px-0.5 rounded">$1</mark>');
+      }
+    }
+    return result;
+  };
+
   // refsデータの位置情報を使ってテキストにリンクを埋め込む関数
   const renderTextWithRefsLinks = (text, refs, paragraphNum, currentLawId, currentLawTitle, currentArticleTitle = null) => {
     // 現在の条文番号を抽出（「第四百五十五条」→「455」）
@@ -984,9 +1062,31 @@ export default function App() {
           console.log('✅ マッチ！スクロールします');
           found = true;
 
-          // 親のスクロールコンテナを取得
-          const scrollContainer = el.closest('.overflow-y-auto');
+          // 会話IDを使って直接その会話の条文コンテナを取得
+          let scrollContainer = null;
+          if (convId) {
+            scrollContainer = document.getElementById(`articles-container-${convId}`);
+          }
+
+          // 見つからない場合は従来の方法でスクロールコンテナを探す
+          if (!scrollContainer) {
+            scrollContainer = el.closest('.overflow-y-auto');
+          }
+          if (!scrollContainer) {
+            // lg:overflow-y-auto の場合、実際のスタイルで判定
+            let parent = el.parentElement;
+            while (parent) {
+              const style = window.getComputedStyle(parent);
+              if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                scrollContainer = parent;
+                break;
+              }
+              parent = parent.parentElement;
+            }
+          }
+
           if (scrollContainer) {
+            console.log('📦 スクロールコンテナ発見:', scrollContainer.id || 'no-id');
             // コンテナ内でのスクロール位置を計算（上部に少し余白を持たせる）
             const containerRect = scrollContainer.getBoundingClientRect();
             const elementRect = el.getBoundingClientRect();
@@ -998,8 +1098,10 @@ export default function App() {
               behavior: 'smooth'
             });
           } else {
-            // フォールバック
-            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // フォールバック: 条文要素を画面に表示（ただしページ全体はスクロールしない）
+            console.log('📱 フォールバック: scrollIntoView (条文のみ)');
+            // block: 'nearest' を使って最小限のスクロールにする
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
 
           el.classList.add('ring-4', 'ring-yellow-400');
@@ -1138,8 +1240,7 @@ export default function App() {
 
     const data = await response.json();
     if (data.error) {
-      const errorMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
-      throw new Error(errorMsg);
+      throw new Error(data.error);
     }
     if (!data.content || !data.content[0]) {
       console.error('❌ 予期しないAPIレスポンス:', data);
@@ -1177,8 +1278,8 @@ export default function App() {
           question: actualQuery,
           answer: greetingResponse,
           relevantArticles: [],
-          refsMap: {},
-          timestamp: new Date()
+          refsMap: refsMap,
+        timestamp: new Date()
         }]);
         setQuery('');
         setLoading(false);
@@ -1503,10 +1604,11 @@ ${instructionText}
       // → 説明文に言及された条文のみを右サイドバーに表示
       const mentionedInAnswer = new Set(); // 「法令名_条文タイトル」のセット
       // アラビア数字と漢数字の両方に対応、スペースなし・枝番複数にも対応
+      // 「法律」で終わる法令名にも対応（電子署名及び認証業務に関する法律など）
       const mentionPatterns = [
         // 【法令名 第X条】【法令名第X条】【法令名 第X条の7の4】など
-        /【([^】]+?(?:法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)(?:第[0-9一二三四五六七八九十]+項)?】/g,
-        /(?:^|[（(「『\s])([^\s（(「『【】）)」』]+?(?:法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)/gm
+        /【([^】]+?(?:法律|法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)(?:第[0-9一二三四五六七八九十]+項)?】/g,
+        /(?:^|[（(「『\s])([^\s（(「『【】）)」』]+?(?:法律|法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)/gm
       ];
 
       // アラビア数字を漢数字に変換するヘルパー
@@ -1537,10 +1639,17 @@ ${instructionText}
         return str;
       };
 
+      // 法令名として無効なパターン（「同法」「本法」「前法」など）
+      const invalidLawNames = ['同法', '本法', '前法', '同法律', '本法律', '前法律', '同令', '本令', '前令', '同規則', '本規則', '前規則'];
+
       for (const pattern of mentionPatterns) {
         let match;
         while ((match = pattern.exec(answer)) !== null) {
           const lawName = match[1].trim();
+          // 無効な法令名はスキップ
+          if (invalidLawNames.includes(lawName)) {
+            continue;
+          }
           // アラビア数字を漢数字に変換して統一
           const articleNum = arabicToKanjiLocal(match[2]);
           // 枝番部分（「の7の4」→「の七の四」）を処理
@@ -1611,7 +1720,12 @@ ${instructionText}
               const data = await response.json();
               if (data.results && data.results.length > 0) {
                 const result = data.results[0];
-                if (result.article.title === articleTitle && result.article.paragraphs?.length > 0) {
+                // 条文タイトルが一致し、paragraphsがあれば返す
+                // 法令名も確認（部分一致でOK）
+                const titleMatch = result.article.title === articleTitle;
+                const lawMatch = result.law.law_title.includes(lawName) || lawName.includes(result.law.law_title);
+                console.log(`🔍 言及条文検索: ${lawName} ${articleTitle} → 結果: ${result.law.law_title} ${result.article.title} (titleMatch=${titleMatch}, lawMatch=${lawMatch}, paragraphs=${result.article.paragraphs?.length})`);
+                if (titleMatch && lawMatch && result.article.paragraphs?.length > 0) {
                   return {
                     article: result.article,
                     lawData: result.law,
@@ -1708,7 +1822,7 @@ ${instructionText}
   // ===== メインUI =====
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="w-full px-4 lg:px-8">
+      <div className="w-full px-1 sm:px-4 lg:px-8">
         <div className="bg-white shadow-sm">
           {/* ヘッダー */}
           <div className="border-b border-gray-200 px-4 py-1">
@@ -1731,7 +1845,7 @@ ${instructionText}
           {/* メインエリア */}
           <div className="flex flex-col h-[calc(100vh-120px)]">
             {/* 会話エリア */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-2 sm:p-4 lg:p-6">
               {conversations.length === 0 && (
                 <div className="text-center py-20">
                   <img src={logoB} alt="条文くん" className="h-32 mx-auto mb-4" />
@@ -1783,9 +1897,9 @@ ${instructionText}
                   >
                     {/* ユーザーの質問 */}
                     <div className="flex justify-end">
-                      <div className="max-w-2xl">
-                        <div className="flex items-start gap-3 justify-end">
-                          <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl px-5 py-3 shadow-md">
+                      <div className="max-w-full sm:max-w-2xl">
+                        <div className="flex items-start gap-2 sm:gap-3 justify-end">
+                          <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl px-3 py-2 sm:px-5 sm:py-3 shadow-md">
                             <p className="leading-relaxed">{conv.question}</p>
                             <p className="text-xs text-blue-100 mt-2 text-right">
                               {conv.timestamp?.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) || ''}
@@ -1799,27 +1913,29 @@ ${instructionText}
                     </div>
 
                     {/* AIの回答と条文を左右分割（PCのみ） */}
-                    <div className="flex flex-col lg:flex-row gap-4">
+                    <div className="flex flex-col lg:flex-row gap-2 sm:gap-4">
                       {/* 左側: AI解説 */}
                       <div className="lg:w-1/2">
-                        <div className="flex items-start gap-3">
-                          <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-md">
+                        {/* AIアイコンを吹き出しの上に配置 */}
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-[10px] sm:text-xs font-bold shadow-md">
                             AI
                           </div>
-                          <div
-                            className="flex-grow bg-white rounded-2xl shadow-sm border border-gray-200 px-6 py-5"
-                            data-explanation-conv-id={conv.id}
-                          >
-                            <div className="prose prose-base max-w-none">
-                              {formatExplanation(conv.answer)}
-                            </div>
+                          <span className="text-xs text-gray-500">条文くん</span>
+                        </div>
+                        <div
+                          className="bg-white rounded-xl sm:rounded-2xl shadow-sm border border-gray-200 px-2 py-2 sm:px-4 sm:py-4"
+                          data-explanation-conv-id={conv.id}
+                        >
+                          <div className="prose prose-base max-w-none">
+                            {formatExplanation(conv.answer)}
                           </div>
                         </div>
                       </div>
 
                       {/* 右側: 関連条文（sticky + 独立スクロール） */}
                       <div className="lg:w-1/2 lg:self-start lg:sticky lg:top-4" data-conv-id={conv.id}>
-                        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200 shadow-sm">
+                        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-2 sm:p-4 border border-blue-200 shadow-sm">
                           <div className="flex items-center gap-2 mb-4">
                             <span className="text-lg">📋</span>
                             <span className="text-blue-700 font-bold text-base">参照条文</span>
@@ -1830,11 +1946,11 @@ ${instructionText}
                           {(!conv.relevantArticles || conv.relevantArticles.length === 0) ? (
                             <div className="text-gray-500 text-sm py-4 text-center">該当なし</div>
                           ) : (
-                            <div className="space-y-3 max-h-[calc(100vh-180px)] overflow-y-auto">
+                            <div id={`articles-container-${conv.id}`} className="space-y-2 sm:space-y-3 lg:max-h-[calc(100vh-180px)] lg:overflow-y-auto">
                               {conv.relevantArticles.map((item, index) => (
                                 <div key={`${item.lawData.law_id}-${item.article.number}-${index}`}
                                      data-article-id={`${item.lawData.law_title}-${item.article.title}`}
-                                     className={`article-card bg-white rounded-lg border-2 transition-all p-4 ${item.isMentioned ? 'border-green-200 hover:border-green-300' : item.isReference ? 'border-orange-200 hover:border-orange-300' : 'border-blue-100 hover:border-blue-300'}`}>
+                                     className={`article-card bg-white rounded-lg border-2 transition-all p-2 sm:p-4 ${item.isMentioned ? 'border-green-200 hover:border-green-300' : item.isReference ? 'border-orange-200 hover:border-orange-300' : 'border-blue-100 hover:border-blue-300'}`}>
                                   <div className="flex items-start justify-between">
                                     <div className="flex-grow">
                                       <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -1907,10 +2023,6 @@ ${instructionText}
                                                       <span className="font-bold text-blue-600 mr-1">{paragraph.num}</span>
                                                     )}
                                                     {displaySentences.map((sentence, sIndex) => {
-                                                      // 参照条文・言及条文の場合はリンクなしでプレーンテキスト表示
-                                                      if (item.isReference || item.isMentioned) {
-                                                        return <span key={sIndex}>{sentence.text}</span>;
-                                                      }
                                                       const articleKey = `${item.lawData.law_id}_${item.article.title}`;
                                                       const refs = conv.refsMap?.[articleKey] || [];
                                                       return (
@@ -1990,7 +2102,7 @@ ${instructionText}
             )}
 
             {/* 入力エリア */}
-            <div className="border-t border-gray-200 bg-white p-4">
+            <div className="border-t border-gray-200 bg-white p-2 sm:p-4">
               {isTokenLimitReached ? (
                 <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
                   <div className="flex items-center justify-between">
@@ -2015,20 +2127,20 @@ ${instructionText}
                 </div>
               ) : (
                 <>
-                  <div className="flex gap-3">
+                  <div className="flex gap-2 sm:gap-3">
                     <input
                       type="text"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && !loading && handleSearch()}
-                      placeholder="法的な質問を入力してください（例：手付金について、民法234条、会社設立に必要な書類）"
-                      className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                      placeholder="法的な質問を入力..."
+                      className="flex-1 px-3 py-2 sm:px-4 sm:py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm sm:text-base"
                       disabled={loading}
                     />
                     <button
                       onClick={handleSearch}
                       disabled={loading || !query.trim()}
-                      className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
+                      className="px-4 py-2 sm:px-6 sm:py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2 text-sm sm:text-base"
                     >
                       {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>}
                       {loading ? '検索中' : '送信'}

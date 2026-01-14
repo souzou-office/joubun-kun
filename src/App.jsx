@@ -388,6 +388,8 @@ const extractArticleNumberFromTitle = (title) => {
 
 // プロモード設定
 const PRO_MODE_STORAGE = 'joubun_pro_mode';
+const SEARCH_HISTORY_STORAGE = 'joubun_search_history';
+const MAX_HISTORY = 10;
 
 const saveProMode = (enabled) => {
   localStorage.setItem(PRO_MODE_STORAGE, enabled ? 'true' : 'false');
@@ -395,6 +397,30 @@ const saveProMode = (enabled) => {
 
 const getProMode = () => {
   return localStorage.getItem(PRO_MODE_STORAGE) === 'true';
+};
+
+const saveSearchHistory = (query) => {
+  try {
+    const history = getSearchHistory();
+    const filtered = history.filter(h => h !== query);
+    const updated = [query, ...filtered].slice(0, MAX_HISTORY);
+    localStorage.setItem(SEARCH_HISTORY_STORAGE, JSON.stringify(updated));
+  } catch (e) {
+    console.error('履歴保存エラー:', e);
+  }
+};
+
+const getSearchHistory = () => {
+  try {
+    const stored = localStorage.getItem(SEARCH_HISTORY_STORAGE);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+const clearSearchHistory = () => {
+  localStorage.removeItem(SEARCH_HISTORY_STORAGE);
 };
 
 // トークン制限
@@ -420,7 +446,71 @@ const calculateConversationTokens = (conversations) => {
 
 // AI解説テキストを見やすくフォーマット
 const formatExplanation = (text, onArticleClick) => {
-  let cleanText = text
+  // Markdownテーブルを先にHTMLテーブルに変換
+  const parseMarkdownTable = (text) => {
+    const lines = text.split('\n');
+    const result = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+      // テーブル行の検出: | で始まり | で終わる
+      if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+        const tableLines = [];
+        // 連続するテーブル行を収集
+        while (i < lines.length && lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) {
+          tableLines.push(lines[i]);
+          i++;
+        }
+
+        if (tableLines.length >= 2) {
+          // セパレータ行（|---|---|）を検出
+          const sepIndex = tableLines.findIndex(l => /^\|[\s\-:|]+\|$/.test(l.trim()));
+          if (sepIndex === 1) {
+            // 有効なテーブル
+            const headerRow = tableLines[0];
+            const dataRows = tableLines.slice(2);
+
+            const parseRow = (row) => {
+              return row.split('|').slice(1, -1).map(cell => cell.trim());
+            };
+
+            const headers = parseRow(headerRow);
+            const rows = dataRows.map(parseRow);
+
+            // HTMLテーブルを生成
+            let html = '<div class="overflow-x-auto my-4"><table class="min-w-full border-collapse border border-gray-300 text-sm">';
+            html += '<thead class="bg-gray-100"><tr>';
+            headers.forEach(h => {
+              html += `<th class="border border-gray-300 px-3 py-2 text-left font-semibold">${h}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+            rows.forEach((row, idx) => {
+              const bgClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+              html += `<tr class="${bgClass}">`;
+              row.forEach(cell => {
+                html += `<td class="border border-gray-300 px-3 py-2">${cell}</td>`;
+              });
+              html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+
+            result.push(html);
+            continue;
+          }
+        }
+        // テーブルとして認識できない場合はそのまま追加
+        tableLines.forEach(l => result.push(l));
+      } else {
+        result.push(line);
+        i++;
+      }
+    }
+
+    return result.join('\n');
+  };
+
+  let cleanText = parseMarkdownTable(text)
     .replace(/^#{4,6}\s+/gm, '    ')
     .replace(/^###\s+/gm, '   ')
     .replace(/^##\s+/gm, '  ')
@@ -481,6 +571,11 @@ const formatExplanation = (text, onArticleClick) => {
   const paragraphs = cleanText.split('\n').filter(p => p.trim());
 
   return paragraphs.map((paragraph, index) => {
+    // HTMLテーブルはそのまま出力
+    if (paragraph.trim().startsWith('<div class="overflow-x-auto')) {
+      return <div key={index} dangerouslySetInnerHTML={{ __html: paragraph }} />;
+    }
+
     let content = paragraph;
 
     // デバッグ: 【】を含む場合にログ出力
@@ -608,6 +703,7 @@ export default function App() {
   const [tokenCount, setTokenCount] = useState(0);
   const [isTokenLimitReached, setIsTokenLimitReached] = useState(false);
   const [proMode, setProMode] = useState(false);
+  const [searchHistory, setSearchHistory] = useState([]);
   const [articlePopup, setArticlePopup] = useState(null); // { lawId, lawTitle, articleNum, loading, data, error }
   const [articlePopupPos, setArticlePopupPos] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -986,15 +1082,19 @@ export default function App() {
   // ===== 初期化 =====
   useEffect(() => {
     checkProMode();
+    loadSearchHistory();
     initialize();
   }, []);
 
-  // ===== 新しい会話が追加されたらスクロール =====
+  // ===== 新しい会話が追加されたらスクロール（ストリーミング中は除く）=====
+  const prevConversationsLengthRef = useRef(0);
   useEffect(() => {
-    if (latestConversationRef.current && conversations.length > 0) {
+    // 会話の数が増えた時のみスクロール（ストリーミング中の更新では発動しない）
+    if (latestConversationRef.current && conversations.length > prevConversationsLengthRef.current) {
       latestConversationRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [conversations]);
+    prevConversationsLengthRef.current = conversations.length;
+  }, [conversations.length]);
 
   // ===== 条文リンクのクリックイベント（ネイティブイベントリスナー）=====
   useEffect(() => {
@@ -1219,6 +1319,10 @@ export default function App() {
     setProMode(getProMode());
   };
 
+  const loadSearchHistory = () => {
+    setSearchHistory(getSearchHistory());
+  };
+
   const initialize = async () => {
     // Worker側で検索するので、ブラウザ側での初期化は不要
     setModelLoading(false);
@@ -1249,11 +1353,61 @@ export default function App() {
     return data.content[0].text;
   };
 
+  // ===== Claude API ストリーミング呼び出し（Worker経由）=====
+  const callClaudeStream = async (messages, system = '', onChunk) => {
+    const response = await fetch(`${WORKER_URL}/api/chat-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, system })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Claude API error: ${errorData}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+              fullText += parsed.delta.text;
+              onChunk(fullText);
+            }
+          } catch (e) {
+            // パースエラーは無視
+          }
+        }
+      }
+    }
+
+    return fullText;
+  };
+
   // ===== 検索処理 =====
   const handleSearch = async (searchQuery = null) => {
     const actualQuery = (typeof searchQuery === 'string') ? searchQuery : query;
 
     if (!actualQuery.trim() || modelLoading) return;
+
+    // 検索履歴を保存
+    saveSearchHistory(actualQuery.trim());
+    setSearchHistory(getSearchHistory());
 
     setLoading(true);
     setError(null);
@@ -1278,8 +1432,8 @@ export default function App() {
           question: actualQuery,
           answer: greetingResponse,
           relevantArticles: [],
-          refsMap: refsMap,
-        timestamp: new Date()
+          refsMap: {},
+          timestamp: new Date()
         }]);
         setQuery('');
         setLoading(false);
@@ -1377,6 +1531,7 @@ ${articleContext}
 {"selected_indices": [1, 2, 3]}
 
 - selected_indices: 関連する条文の番号（候補リストの1〜20から選択、最大5件）
+- **重要度が高い順に並べてください**（最も関連性の高い条文を先頭に）
 - 見つからない場合は空配列 []
 `;
 
@@ -1419,6 +1574,114 @@ ${articleContext}
       });
 
       console.log(`✅ ${selectedArticles.length}個の条文を選択`);
+
+      // プロフェッショナルモード: refs取得後、説明文生成をスキップして条文のみ表示
+      if (proMode) {
+        console.log('🚀 プロフェッショナルモード: 説明文生成スキップ');
+        setProcessingStep('🔗 関連条文を取得中...');
+        setProgress(80);
+
+        // refs取得
+        let refsData = [];
+        if (selectedArticles.length > 0) {
+          try {
+            const refsResponse = await fetch(`${WORKER_URL}/api/refs`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                articles: selectedArticles.map(item => ({
+                  law_id: item.law.law_id,
+                  article_title: item.article.title
+                }))
+              })
+            });
+            if (refsResponse.ok) {
+              const refsResult = await refsResponse.json();
+              refsData = refsResult.results || [];
+              console.log('📚 参照情報取得完了:', refsData.length, '件');
+            }
+          } catch (refsError) {
+            console.error('⚠️ 参照情報取得エラー（続行）:', refsError);
+          }
+        }
+
+        // refsMapを作成
+        const refsMap = {};
+        refsData.forEach(r => {
+          const key = `${r.law_id}_${r.article_title}`;
+          refsMap[key] = r.refs || [];
+        });
+
+        // 参照先条文のIDを収集
+        const refTargets = new Set();
+        refsData.forEach(r => {
+          r.refs?.forEach(ref => {
+            if (ref.target) refTargets.add(ref.target);
+          });
+          r.reverse_refs?.slice(0, 5).forEach(revRef => {
+            if (typeof revRef === 'string') refTargets.add(revRef);
+          });
+        });
+
+        // 参照先条文をフェッチ
+        let refArticlesData = {};
+        if (refTargets.size > 0) {
+          setProcessingStep('📖 参照条文を取得中...');
+          try {
+            const articlesResponse = await fetch(`${WORKER_URL}/api/articles`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ articleIds: [...refTargets] })
+            });
+            if (articlesResponse.ok) {
+              const articlesResult = await articlesResponse.json();
+              (articlesResult.results || []).forEach(art => {
+                refArticlesData[art.id] = art;
+              });
+              console.log('📚 参照先条文取得完了:', Object.keys(refArticlesData).length, '件');
+            }
+          } catch (refArticlesError) {
+            console.error('⚠️ 参照先条文取得エラー（続行）:', refArticlesError);
+          }
+        }
+
+        setProgress(100);
+
+        // 選定条文
+        const displayArticles = selectedArticles.map(item => ({
+          article: item.article,
+          lawData: item.law,
+          similarity: item.score
+        }));
+
+        // 参照条文（オレンジ）を追加
+        const refArticles = Object.values(refArticlesData)
+          .filter(refArt => refArt.article?.paragraphs?.length > 0)
+          .map(refArt => ({
+            article: refArt.article,
+            lawData: { law_id: refArt.law_id, law_title: refArt.law_title },
+            similarity: 0,
+            isReference: true
+          }));
+
+        console.log('📚 参照条文:', refArticles.length, '件');
+
+        setConversations(prev => [...prev, {
+          id: Date.now(),
+          question: actualQuery,
+          answer: null,  // 説明文なし
+          relevantArticles: [...displayArticles, ...refArticles],
+          refsMap: refsMap,
+          timestamp: new Date(),
+          isProMode: true
+        }]);
+
+        setQuery('');
+        setProcessingStep('');
+        setProgress(0);
+        setLoading(false);
+        return;
+      }
 
       // 【第4段階】参照条文情報を取得
       setProcessingStep('🔗 関連条文を取得中...');
@@ -1568,6 +1831,8 @@ ${explainContext}
 【絶対厳守】
 - 回答には**上記の選定条文のみ**を使用してください
 - リストにない条文は、たとえ関連がありそうでも**絶対に言及しないでください**
+- 条文を引用する際は必ず「【法令名 第X条】」の形式を使用してください
+- 「同法」「本法」「前条」などの省略表現は**絶対に使用禁止**です。必ず正式な法令名を毎回書いてください
 
 ${instructionText}
 
@@ -1586,13 +1851,34 @@ ${instructionText}
 
       console.log(`📚 会話履歴: ${conversations.length}件の過去の会話を含む`);
 
+      // ストリーミング用の一時的な会話エントリを作成
+      const tempConvId = Date.now();
+      setConversations(prev => [...prev, {
+        id: tempConvId,
+        question: actualQuery,
+        answer: '',
+        relevantArticles: [],
+        refsMap: {},
+        timestamp: new Date(),
+        isStreaming: true
+      }]);
+
       let answer;
       try {
-        answer = await callClaude(messages, '', 2000);
+        answer = await callClaudeStream(messages, '', (partialText) => {
+          // ストリーミング中に回答を逐次更新
+          setConversations(prev => prev.map(conv =>
+            conv.id === tempConvId
+              ? { ...conv, answer: partialText }
+              : conv
+          ));
+        });
         console.log('📥 説明文生成完了');
         console.log('📝 生成された説明:', answer.substring(0, 300));
       } catch (apiError) {
         console.error('❌ Claude説明文生成エラー:', apiError);
+        // エラー時は一時エントリを削除
+        setConversations(prev => prev.filter(conv => conv.id !== tempConvId));
         throw apiError;
       }
 
@@ -1770,14 +2056,18 @@ ${instructionText}
 
       console.log('📦 サイドバー表示条文数:', displayArticles.length, '件');
 
-      setConversations(prev => [...prev, {
-        id: Date.now(),
-        question: actualQuery,
-        answer: answer,
-        relevantArticles: displayArticles,
-        refsMap: refsMap,
-        timestamp: new Date()
-      }]);
+      // ストリーミングで作成した一時エントリを最終データで更新
+      setConversations(prev => prev.map(conv =>
+        conv.id === tempConvId
+          ? {
+              ...conv,
+              answer: answer,
+              relevantArticles: displayArticles,
+              refsMap: refsMap,
+              isStreaming: false
+            }
+          : conv
+      ));
 
       setQuery('');
       setProcessingStep('');
@@ -1847,19 +2137,51 @@ ${instructionText}
             {/* 会話エリア */}
             <div className="flex-1 overflow-y-auto p-2 sm:p-4 lg:p-6">
               {conversations.length === 0 && (
-                <div className="text-center py-20">
-                  <img src={logoB} alt="条文くん" className="h-32 mx-auto mb-4" />
-                  <p className="text-gray-500 mb-6">法的な質問を入力してください</p>
-                  <div className="text-sm text-gray-400 space-y-1">
-                    <div>💡 例：「手付金を放棄して契約解除できる？」</div>
-                    <div>💡 例：「株式会社の設立に必要な書類は？」</div>
-                    <div>💡 例：「民法の境界線についての規定を教えて」</div>
-                  </div>
+                <div className="py-8 px-4 max-w-2xl mx-auto">
+                  {/* 検索履歴 */}
+                  {searchHistory.length > 0 ? (
+                    <div className="mb-8">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-medium text-gray-600">検索履歴</h3>
+                        <button
+                          onClick={() => {
+                            clearSearchHistory();
+                            setSearchHistory([]);
+                          }}
+                          className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer"
+                        >
+                          履歴をクリア
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {searchHistory.map((item, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              setQuery(item);
+                              handleSearch(item);
+                            }}
+                            disabled={loading}
+                            className={`w-full text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                          >
+                            🔍 {item}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-400 space-y-2 text-center mb-8">
+                      <p className="text-gray-500 mb-4">法的な質問を入力してください</p>
+                      <div>💡 例：「手付金を放棄して契約解除できる？」</div>
+                      <div>💡 例：「株式会社の設立に必要な書類は？」</div>
+                      <div>💡 例：「民法の境界線についての規定を教えて」</div>
+                    </div>
+                  )}
 
-                  {/* 簡潔回答モード切替 */}
-                  <div className="mt-8 flex items-center justify-center gap-3">
+                  {/* プロフェッショナルモード切替 */}
+                  <div className="flex items-center justify-center gap-3">
                     <span className={`text-sm ${proMode ? 'text-gray-400' : 'text-gray-700 font-medium'}`}>
-                      通常回答
+                      通常
                     </span>
                     <button
                       onClick={() => {
@@ -1870,7 +2192,7 @@ ${instructionText}
                       disabled={loading}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                         loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                      } ${proMode ? 'bg-blue-600' : 'bg-gray-300'}`}
+                      } ${proMode ? 'bg-purple-600' : 'bg-gray-300'}`}
                     >
                       <span
                         className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -1878,13 +2200,10 @@ ${instructionText}
                         }`}
                       />
                     </button>
-                    <span className={`text-sm ${proMode ? 'text-blue-700 font-medium' : 'text-gray-400'}`}>
-                      簡潔回答
+                    <span className={`text-sm ${proMode ? 'text-purple-700 font-medium' : 'text-gray-400'}`}>
+                      AI解説省略
                     </span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">
-                    簡潔回答：条文の詳細解説を省略し、関連性のみ表示
-                  </p>
                 </div>
               )}
 
@@ -1898,52 +2217,68 @@ ${instructionText}
                     {/* ユーザーの質問 */}
                     <div className="flex justify-end">
                       <div className="max-w-full sm:max-w-2xl">
-                        <div className="flex items-start gap-2 sm:gap-3 justify-end">
-                          <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl px-3 py-2 sm:px-5 sm:py-3 shadow-md">
-                            <p className="leading-relaxed">{conv.question}</p>
-                            <p className="text-xs text-blue-100 mt-2 text-right">
-                              {conv.timestamp?.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) || ''}
-                            </p>
-                          </div>
-                          <div className="flex-shrink-0 w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-600 text-sm font-bold">
+                        {/* ユーザーアイコンを吹き出しの上に配置（右寄せ） */}
+                        <div className="flex items-center gap-2 mb-1 justify-end">
+                          <span className="text-xs text-gray-500">あなた</span>
+                          <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gray-200 rounded-full flex items-center justify-center text-gray-600 text-[10px] sm:text-xs">
                             👤
                           </div>
+                        </div>
+                        <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl px-3 py-2 sm:px-5 sm:py-3 shadow-md">
+                          <p className="leading-relaxed">{conv.question}</p>
                         </div>
                       </div>
                     </div>
 
-                    {/* AIの回答と条文を左右分割（PCのみ） */}
-                    <div className="flex flex-col lg:flex-row gap-2 sm:gap-4">
-                      {/* 左側: AI解説 */}
-                      <div className="lg:w-1/2">
-                        {/* AIアイコンを吹き出しの上に配置 */}
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-[10px] sm:text-xs font-bold shadow-md">
-                            AI
+                    {/* AIの回答と条文を左右分割（PCのみ）- プロフェッショナルモードでは条文のみ全幅表示 */}
+                    <div className={`flex flex-col ${conv.isProMode ? '' : 'lg:flex-row'} gap-2 sm:gap-4`}>
+                      {/* 左側: AI解説（プロフェッショナルモードでは非表示） */}
+                      {!conv.isProMode && (
+                        <div className="lg:w-1/2">
+                          {/* AIアイコンを吹き出しの上に配置 */}
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-[10px] sm:text-xs font-bold shadow-md">
+                              AI
+                            </div>
+                            <span className="text-xs text-gray-500">条文くん</span>
                           </div>
-                          <span className="text-xs text-gray-500">条文くん</span>
-                        </div>
-                        <div
-                          className="bg-white rounded-xl sm:rounded-2xl shadow-sm border border-gray-200 px-2 py-2 sm:px-4 sm:py-4"
-                          data-explanation-conv-id={conv.id}
-                        >
-                          <div className="prose prose-base max-w-none">
-                            {formatExplanation(conv.answer)}
+                          <div
+                            className="bg-white rounded-xl sm:rounded-2xl shadow-sm border border-gray-200 px-2 py-2 sm:px-4 sm:py-4"
+                            data-explanation-conv-id={conv.id}
+                          >
+                            <div className="prose prose-base max-w-none">
+                              {conv.isStreaming && !conv.answer ? (
+                                <div className="flex items-center gap-2 text-blue-600">
+                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                                  回答を生成中...
+                                </div>
+                              ) : (
+                                formatExplanation(conv.answer)
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
 
-                      {/* 右側: 関連条文（sticky + 独立スクロール） */}
-                      <div className="lg:w-1/2 lg:self-start lg:sticky lg:top-4" data-conv-id={conv.id}>
+                      {/* 右側: 関連条文（sticky + 独立スクロール）- プロフェッショナルモードでは全幅 */}
+                      <div className={`${conv.isProMode ? 'w-full' : 'lg:w-1/2'} lg:self-start lg:sticky lg:top-4`} data-conv-id={conv.id}>
                         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-2 sm:p-4 border border-blue-200 shadow-sm">
                           <div className="flex items-center gap-2 mb-4">
                             <span className="text-lg">📋</span>
-                            <span className="text-blue-700 font-bold text-base">参照条文</span>
+                            <span className="text-blue-700 font-bold text-base">{conv.isProMode ? '選定条文' : '参照条文'}</span>
                             {conv.relevantArticles && conv.relevantArticles.length > 0 && (
                               <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">{conv.relevantArticles.length}件</span>
                             )}
+                            {conv.isProMode && (
+                              <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">AI解説省略</span>
+                            )}
                           </div>
-                          {(!conv.relevantArticles || conv.relevantArticles.length === 0) ? (
+                          {conv.isStreaming ? (
+                            <div className="text-blue-600 text-sm py-4 text-center flex items-center justify-center gap-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                              条文を取得中...
+                            </div>
+                          ) : (!conv.relevantArticles || conv.relevantArticles.length === 0) ? (
                             <div className="text-gray-500 text-sm py-4 text-center">該当なし</div>
                           ) : (
                             <div id={`articles-container-${conv.id}`} className="space-y-2 sm:space-y-3 lg:max-h-[calc(100vh-180px)] lg:overflow-y-auto">
@@ -2428,13 +2763,13 @@ function SettingsModal({ onClose, proMode, setProMode }) {
         </div>
 
         <div className="space-y-6">
-          {/* 簡潔回答モード設定 */}
+          {/* AI解説省略モード設定 */}
           <div>
             <div className="flex items-center justify-between">
               <div>
-                <label className="block text-sm font-medium text-gray-700">簡潔回答モード</label>
+                <label className="block text-sm font-medium text-gray-700">AI解説省略モード</label>
                 <p className="text-xs text-gray-500 mt-1">
-                  条文の詳細解説を省略し、関連性のみ表示
+                  AIによる詳細解説を省略し、選定条文のみ表示
                 </p>
               </div>
               <button

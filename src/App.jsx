@@ -2386,6 +2386,23 @@ ${instructionText}
                                                               <span key={sIndex}>{renderTextWithRefsLinks(sentence.text, refs, paragraph.num, item.lawData.law_id, item.lawData.law_title, item.article.title)}</span>
                                                             );
                                                           })}
+                                                          {/* sub_items（イ、ロ、ハ等）の表示 */}
+                                                          {subItem.sub_items && subItem.sub_items.length > 0 && (
+                                                            <div className="space-y-1 mt-2 ml-2">
+                                                              {subItem.sub_items.map((subSubItem, subSubIndex) => (
+                                                                <div key={subSubIndex} className="flex gap-2 border-l-2 border-green-300 pl-2 py-0.5">
+                                                                  <span className="font-bold text-green-700 bg-green-100 px-1.5 py-0.5 rounded min-w-[30px] text-center flex-shrink-0 h-fit text-xs">
+                                                                    {subSubItem.subitem_title}
+                                                                  </span>
+                                                                  <div className="flex-1 text-sm">
+                                                                    {subSubItem.sentences?.map((sentence, sIdx) => (
+                                                                      <span key={sIdx}>{sentence.text}</span>
+                                                                    ))}
+                                                                  </div>
+                                                                </div>
+                                                              ))}
+                                                            </div>
+                                                          )}
                                                         </div>
                                                       </div>
                                                     ))}

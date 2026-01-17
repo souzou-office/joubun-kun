@@ -2137,73 +2137,49 @@ ${instructionText}
             {/* 会話エリア */}
             <div className="flex-1 overflow-y-auto p-2 sm:p-4 lg:p-6">
               {conversations.length === 0 && (
-                <div className="py-8 px-4 max-w-2xl mx-auto">
-                  {/* 検索履歴 */}
-                  {searchHistory.length > 0 ? (
-                    <div className="mb-8">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-medium text-gray-600">検索履歴</h3>
-                        <button
-                          onClick={() => {
-                            clearSearchHistory();
-                            setSearchHistory([]);
-                          }}
-                          className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer"
-                        >
-                          履歴をクリア
-                        </button>
-                      </div>
-                      <div className="space-y-2">
-                        {searchHistory.map((item, idx) => (
+                <div className="py-8 px-4 max-w-2xl mx-auto flex flex-col" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+                  {/* 検索履歴（スクロール可能、最大5件表示） */}
+                  <div className="flex-1 overflow-y-auto min-h-0">
+                    {searchHistory.length > 0 ? (
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-medium text-gray-600">検索履歴</h3>
                           <button
-                            key={idx}
                             onClick={() => {
-                              setQuery(item);
-                              handleSearch(item);
+                              clearSearchHistory();
+                              setSearchHistory([]);
                             }}
-                            disabled={loading}
-                            className={`w-full text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                            className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer"
                           >
-                            🔍 {item}
+                            履歴をクリア
                           </button>
-                        ))}
+                        </div>
+                        <div className="space-y-2">
+                          {searchHistory.slice(0, 10).map((item, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => {
+                                setQuery(item);
+                                handleSearch(item);
+                              }}
+                              disabled={loading}
+                              className={`w-full text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                            >
+                              🔍 {item}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-gray-400 space-y-2 text-center mb-8">
-                      <p className="text-gray-500 mb-4">法的な質問を入力してください</p>
-                      <div>💡 例：「手付金を放棄して契約解除できる？」</div>
-                      <div>💡 例：「株式会社の設立に必要な書類は？」</div>
-                      <div>💡 例：「民法の境界線についての規定を教えて」</div>
-                    </div>
-                  )}
-
-                  {/* プロフェッショナルモード切替 */}
-                  <div className="flex items-center justify-center gap-3">
-                    <span className={`text-sm ${proMode ? 'text-gray-400' : 'text-gray-700 font-medium'}`}>
-                      通常
-                    </span>
-                    <button
-                      onClick={() => {
-                        const newMode = !proMode;
-                        setProMode(newMode);
-                        saveProMode(newMode);
-                      }}
-                      disabled={loading}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                      } ${proMode ? 'bg-purple-600' : 'bg-gray-300'}`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          proMode ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                    <span className={`text-sm ${proMode ? 'text-purple-700 font-medium' : 'text-gray-400'}`}>
-                      AI解説省略
-                    </span>
+                    ) : (
+                      <div className="text-sm text-gray-400 space-y-2 text-center mb-4">
+                        <p className="text-gray-500 mb-4">法的な質問を入力してください</p>
+                        <div>💡 例：「手付金を放棄して契約解除できる？」</div>
+                        <div>💡 例：「株式会社の設立に必要な書類は？」</div>
+                        <div>💡 例：「民法の境界線についての規定を教えて」</div>
+                      </div>
+                    )}
                   </div>
+
                 </div>
               )}
 
@@ -2454,7 +2430,35 @@ ${instructionText}
             )}
 
             {/* 入力エリア */}
-            <div className="border-t border-gray-200 bg-white p-2 sm:p-4">
+            <div className="bg-white p-2 sm:p-4">
+              {/* プロフェッショナルモード切替（トップページ時のみ、入力窓の上に表示） */}
+              {conversations.length === 0 && (
+                <div className="flex items-center justify-center gap-3 mb-3">
+                  <span className={`text-sm ${proMode ? 'text-gray-400' : 'text-gray-700 font-medium'}`}>
+                    通常
+                  </span>
+                  <button
+                    onClick={() => {
+                      const newMode = !proMode;
+                      setProMode(newMode);
+                      saveProMode(newMode);
+                    }}
+                    disabled={loading}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                    } ${proMode ? 'bg-purple-600' : 'bg-gray-300'}`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        proMode ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                  <span className={`text-sm ${proMode ? 'text-purple-700 font-medium' : 'text-gray-400'}`}>
+                    AI解説省略
+                  </span>
+                </div>
+              )}
               {isTokenLimitReached ? (
                 <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
                   <div className="flex items-center justify-between">

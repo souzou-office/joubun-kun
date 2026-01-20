@@ -64,7 +64,6 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
 
     if (!resolvedLawId) {
       // マッピングにない場合、Vectorize検索で法令IDを取得
-      console.log(`⚠️ マッピングにない法令: ${lawName} - Vectorize検索で解決を試みます`);
       try {
         const searchQuery = `${lawName} 第一条`;
         const searchResponse = await fetch(`${WORKER_URL}/search`, {
@@ -76,7 +75,6 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
           const searchData = await searchResponse.json();
           if (searchData.results && searchData.results.length > 0 && searchData.results[0].law.law_title === lawName) {
             resolvedLawId = searchData.results[0].law.law_id;
-            console.log(`✅ Vectorize検索で法令ID解決: ${lawName} → ${resolvedLawId}`);
           }
         }
       } catch (e) {
@@ -111,7 +109,6 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
       articleIds: [articleId]
     };
 
-    console.log('📡 条文取得リクエスト:', requestBody);
 
     const response = await fetch(`${WORKER_URL}/api/articles`, {
       method: 'POST',
@@ -122,7 +119,6 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
     if (!response.ok) throw new Error(`API error: ${response.status}`);
     const data = await response.json();
 
-    console.log('📡 条文取得レスポンス:', data);
 
     // 結果を単一の条文形式で返す
     if (data.results && data.results.length > 0) {
@@ -578,10 +574,6 @@ const formatExplanation = (text, onArticleClick) => {
 
     let content = paragraph;
 
-    // デバッグ: 【】を含む場合にログ出力
-    if (content.includes('【') && content.includes('条')) {
-      console.log('🔍 formatExplanation input:', content.slice(0, 200));
-    }
     const originalContent = content;
 
     // 条文番号をクリッカブルなボタンに（太字変換より先に処理）
@@ -596,11 +588,6 @@ const formatExplanation = (text, onArticleClick) => {
         return `<button class="article-link inline-block font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border sm:border-2 border-blue-300 mx-0.5 shadow-sm hover:bg-blue-200 hover:border-blue-400 cursor-pointer transition-colors text-sm sm:text-base" data-law="${trimmedLawName}" data-article="${articleNum}">${displayText}</button>`;
       }
     );
-
-    // デバッグ: 変換後をログ出力
-    if (originalContent.includes('【') && originalContent.includes('条') && originalContent !== content) {
-      console.log('🔍 formatExplanation output:', content.slice(0, 300));
-    }
 
     // 太字を強調（より目立つスタイル）
     content = content.replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-gray-900 bg-gray-100 px-1 rounded">$1</strong>');
@@ -1107,7 +1094,6 @@ export default function App() {
 
       const lawName = target.dataset.law;
       const articleNum = target.dataset.article;
-      console.log('🔗 条文クリック:', lawName, articleNum);
 
       // データ属性が取得できない場合は無視
       if (!lawName || !articleNum) {
@@ -1118,14 +1104,12 @@ export default function App() {
       // 該当する会話のIDを取得（親要素から探す）
       const conversationDiv = target.closest('[data-explanation-conv-id]');
       const convId = conversationDiv?.dataset.explanationConvId;
-      console.log('会話ID:', convId);
 
       // 右側の条文エリアで該当条文を探す
       const selector = convId
         ? `[data-conv-id="${convId}"] .article-card`
         : '.article-card';
       const articleElements = document.querySelectorAll(selector);
-      console.log('条文カード数:', articleElements.length);
 
       // articleNumから条文番号を抽出（「第209条の2」→「209」「の2」または「十九」「の二」）
       // 枝番号（の二、の三など）も含めて抽出
@@ -1147,7 +1131,6 @@ export default function App() {
       }
 
       const fullArticlePattern = `第${articleNumberKanji}条${articleSuffixKanji}`;
-      console.log('抽出した条文番号:', articleNumber + articleSuffix, '→ 検索パターン:', fullArticlePattern);
 
       let found = false;
       for (const el of articleElements) {
@@ -1159,7 +1142,6 @@ export default function App() {
         const articleMatched = text.includes(fullArticlePattern);
 
         if (lawMatched && articleMatched) {
-          console.log('✅ マッチ！スクロールします');
           found = true;
 
           // 会話IDを使って直接その会話の条文コンテナを取得
@@ -1186,7 +1168,6 @@ export default function App() {
           }
 
           if (scrollContainer) {
-            console.log('📦 スクロールコンテナ発見:', scrollContainer.id || 'no-id');
             // コンテナ内でのスクロール位置を計算（上部に少し余白を持たせる）
             const containerRect = scrollContainer.getBoundingClientRect();
             const elementRect = el.getBoundingClientRect();
@@ -1198,9 +1179,7 @@ export default function App() {
               behavior: 'smooth'
             });
           } else {
-            // フォールバック: 条文要素を画面に表示（ただしページ全体はスクロールしない）
-            console.log('📱 フォールバック: scrollIntoView (条文のみ)');
-            // block: 'nearest' を使って最小限のスクロールにする
+            // フォールバック: 条文要素を画面に表示
             el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
 
@@ -1211,9 +1190,6 @@ export default function App() {
       }
 
       if (!found) {
-        console.log('❌ マッチする条文が見つかりませんでした。ポップアップで表示します');
-        console.log('検索条件: 法令名=' + lawName + ', 条文番号=' + fullArticlePattern);
-
         // カスタムイベントを発火してポップアップ表示をトリガー
         const customEvent = new CustomEvent('showArticlePopup', {
           detail: {
@@ -1425,7 +1401,6 @@ export default function App() {
 
       // 挨拶の場合は検索スキップ
       if (queryResult.type === 'greeting') {
-        console.log('👋 挨拶検出 - 検索スキップ');
         const greetingResponse = queryResult.greeting_response || 'こんにちは！法令に関する質問があればお気軽にどうぞ。';
         setConversations(prev => [...prev, {
           id: Date.now(),
@@ -1472,26 +1447,11 @@ export default function App() {
 
       const searchData = await searchResponse.json();
       const top20 = searchData.results;
-      console.log('✅ 検索完了:', top20.length, '件 (RRFランキング)');
 
       setProgress(70);
 
-      console.log('🏆 Top20のスコア:');
-      top20.forEach((item, i) => {
-        console.log(`  ${i + 1}. [${item.score.toFixed(4)}] ${item.law.law_title} ${item.article.title} | paragraphs: ${item.article.paragraphs?.length || 0}`);
-      });
-      // デバッグ: 1件目の詳細
-      if (top20.length > 0) {
-        console.log('📝 1件目の条文詳細:', JSON.stringify(top20[0].article).substring(0, 300));
-      }
-
       // 【第3段階】Claude呼び出し1回目：条文選定のみ
       setProcessingStep('🤖 AIが条文を選定中...');
-      setProgress(60);
-
-      console.log('======================');
-      console.log('【第3段階】Claude条文選定開始');
-      console.log('======================');
 
       // Top20の条文データを整形（スコア付き）
       let articleContext = '\n\n【候補条文データ（スコア順Top20）】\n';
@@ -1535,12 +1495,9 @@ ${articleContext}
 - 見つからない場合は空配列 []
 `;
 
-      console.log('📤 Claude（条文選定）にリクエスト送信...');
-
       let selectionResponse;
       try {
         selectionResponse = await callClaude([{ role: "user", content: selectionPrompt }], '', 200);
-        console.log('📥 条文選定完了:', selectionResponse);
       } catch (apiError) {
         console.error('❌ Claude条文選定エラー:', apiError);
         throw apiError;
@@ -1552,7 +1509,6 @@ ${articleContext}
         const cleanJson = selectionResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsed = JSON.parse(cleanJson);
         selectedIndices = parsed.selected_indices || [];
-        console.log('📊 selected_indices:', selectedIndices);
       } catch (parseError) {
         console.error('⚠️ 選定結果パースエラー、上位3件を使用');
         selectedIndices = [1, 2, 3];
@@ -1573,11 +1529,8 @@ ${articleContext}
         return true;
       });
 
-      console.log(`✅ ${selectedArticles.length}個の条文を選択`);
-
       // プロフェッショナルモード: refs取得後、説明文生成をスキップして条文のみ表示
       if (proMode) {
-        console.log('🚀 プロフェッショナルモード: 説明文生成スキップ');
         setProcessingStep('🔗 関連条文を取得中...');
         setProgress(80);
 
@@ -1598,7 +1551,6 @@ ${articleContext}
             if (refsResponse.ok) {
               const refsResult = await refsResponse.json();
               refsData = refsResult.results || [];
-              console.log('📚 参照情報取得完了:', refsData.length, '件');
             }
           } catch (refsError) {
             console.error('⚠️ 参照情報取得エラー（続行）:', refsError);
@@ -1638,7 +1590,6 @@ ${articleContext}
               (articlesResult.results || []).forEach(art => {
                 refArticlesData[art.id] = art;
               });
-              console.log('📚 参照先条文取得完了:', Object.keys(refArticlesData).length, '件');
             }
           } catch (refArticlesError) {
             console.error('⚠️ 参照先条文取得エラー（続行）:', refArticlesError);
@@ -1663,8 +1614,6 @@ ${articleContext}
             similarity: 0,
             isReference: true
           }));
-
-        console.log('📚 参照条文:', refArticles.length, '件');
 
         setConversations(prev => [...prev, {
           id: Date.now(),
@@ -1703,14 +1652,6 @@ ${articleContext}
           if (refsResponse.ok) {
             const refsResult = await refsResponse.json();
             refsData = refsResult.results || [];
-            console.log('📚 参照情報取得完了:', refsData.length, '件');
-            // デバッグ: 各条文のrefs/reverse_refs件数
-            refsData.forEach(r => {
-              console.log(`  ${r.article_title}: refs=${r.refs?.length || 0}, reverse_refs=${r.reverse_refs?.length || 0}`);
-              if (r.reverse_refs?.length > 0) {
-                console.log('    reverse_refs:', r.reverse_refs);
-              }
-            });
           }
         } catch (refsError) {
           console.error('⚠️ 参照情報取得エラー（続行）:', refsError);
@@ -1720,10 +1661,8 @@ ${articleContext}
       // 参照先条文の内容を取得（refs内のtargetから）
       const refTargets = new Set();
       refsData.forEach(r => {
-        console.log(`📎 ${r.article_title} の refs:`, r.refs?.length, '件');
         r.refs?.forEach(ref => {
           if (ref.target) {
-            console.log(`   → ${ref.target}`);
             refTargets.add(ref.target);
           }
         });
@@ -1732,7 +1671,6 @@ ${articleContext}
           if (typeof revRef === 'string') refTargets.add(revRef);
         });
       });
-      console.log('📚 取得対象の参照先条文:', [...refTargets]);
 
       // 参照先条文をフェッチ
       let refArticlesData = {};
@@ -1749,7 +1687,6 @@ ${articleContext}
             (articlesResult.results || []).forEach(art => {
               refArticlesData[art.id] = art;
             });
-            console.log('📚 参照先条文取得完了:', Object.keys(refArticlesData).length, '件');
           }
         } catch (refArticlesError) {
           console.error('⚠️ 参照先条文取得エラー（続行）:', refArticlesError);
@@ -1759,10 +1696,6 @@ ${articleContext}
       // 【第5段階】Claude呼び出し2回目：説明文生成
       setProcessingStep('🤖 AIが解説を生成中...');
       setProgress(85);
-
-      console.log('======================');
-      console.log('【第5段階】Claude説明文生成開始');
-      console.log('======================');
 
       // 選定条文 + 参照情報をコンテキストに
       let explainContext = '\n\n【選定された条文】\n';
@@ -1839,8 +1772,6 @@ ${instructionText}
 質問に対する回答を生成してください。見つからない場合は「お探しの内容に直接該当する条文は見つかりませんでした。」と記載してください。
 `;
 
-      console.log('📤 Claude（説明文生成）にリクエスト送信...');
-
       // 過去の会話履歴を構築
       const messages = [];
       conversations.forEach(conv => {
@@ -1848,8 +1779,6 @@ ${instructionText}
         messages.push({ role: "assistant", content: conv.answer });
       });
       messages.push({ role: "user", content: explainPrompt });
-
-      console.log(`📚 会話履歴: ${conversations.length}件の過去の会話を含む`);
 
       // ストリーミング用の一時的な会話エントリを作成
       const tempConvId = Date.now();
@@ -1873,8 +1802,6 @@ ${instructionText}
               : conv
           ));
         });
-        console.log('📥 説明文生成完了');
-        console.log('📝 生成された説明:', answer.substring(0, 300));
       } catch (apiError) {
         console.error('❌ Claude説明文生成エラー:', apiError);
         // エラー時は一時エントリを削除
@@ -1951,14 +1878,11 @@ ${instructionText}
         }
       }
 
-      console.log('📝 説明文で言及された条文:', [...mentionedInAnswer]);
-
       // 選定条文のうち、説明で言及されたもののみ抽出
       const mentionedSelectedArticles = selectedArticles.filter(item => {
         const key = `${item.law.law_title}_${item.article.title}`;
         return mentionedInAnswer.has(key);
       });
-      console.log('📚 説明で言及された選定条文:', mentionedSelectedArticles.length, '件');
 
       // 参照条文のうち、説明で言及されたもののみ抽出
       const mentionedRefArticles = Object.values(refArticlesData).filter(refArt => {
@@ -1970,7 +1894,6 @@ ${instructionText}
         similarity: 0,
         isReference: true
       }));
-      console.log('📚 説明で言及された参照条文:', mentionedRefArticles.length, '件');
 
       // まだ取得できていない言及条文を検索して取得
       const newMentions = [...mentionedInAnswer].filter(key => {
@@ -1988,7 +1911,6 @@ ${instructionText}
 
       let additionalMentionedArticles = [];
       if (newMentions.length > 0) {
-        console.log('📝 追加取得が必要な言及条文:', newMentions);
         try {
           const searchPromises = newMentions.slice(0, 10).map(async (key) => {
             const [lawName, articleTitle] = key.split('_');
@@ -2010,7 +1932,6 @@ ${instructionText}
                 // 法令名も確認（部分一致でOK）
                 const titleMatch = result.article.title === articleTitle;
                 const lawMatch = result.law.law_title.includes(lawName) || lawName.includes(result.law.law_title);
-                console.log(`🔍 言及条文検索: ${lawName} ${articleTitle} → 結果: ${result.law.law_title} ${result.article.title} (titleMatch=${titleMatch}, lawMatch=${lawMatch}, paragraphs=${result.article.paragraphs?.length})`);
                 if (titleMatch && lawMatch && result.article.paragraphs?.length > 0) {
                   return {
                     article: result.article,
@@ -2027,7 +1948,6 @@ ${instructionText}
 
           const results = await Promise.all(searchPromises);
           additionalMentionedArticles = results.filter(r => r !== null);
-          console.log('📚 追加言及条文取得完了:', additionalMentionedArticles.length, '件');
         } catch (e) {
           console.error('⚠️ 追加言及条文取得エラー:', e);
         }
@@ -2053,8 +1973,6 @@ ${instructionText}
         ...mentionedRefArticles,
         ...additionalMentionedArticles
       ];
-
-      console.log('📦 サイドバー表示条文数:', displayArticles.length, '件');
 
       // ストリーミングで作成した一時エントリを最終データで更新
       setConversations(prev => prev.map(conv =>

@@ -266,14 +266,23 @@ const formatArticleNum = (articleNum) => {
 // 挨拶/条文直接指定/法的質問を分類し、必要に応じて3種類のクエリを生成
 const classifyAndGenerateQueries = async (originalQuery, conversationHistory = []) => {
   try {
+    // 直前の会話の要約を取得（あれば）
+    const lastConv = conversationHistory.length > 0 ? conversationHistory[conversationHistory.length - 1] : null;
+    const previousSummary = lastConv?.summary || null;
+
+    if (previousSummary) {
+      console.log('📎 前回の要約をclassifyに送信:', previousSummary);
+    }
+
     const response = await fetch(`${WORKER_URL}/api/classify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query: originalQuery,
+        previousSummary: previousSummary,
         conversationHistory: conversationHistory.slice(-2).map(conv => ({
           question: conv.question,
-          answer: conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer
+          summary: conv.summary || ''
         }))
       })
     });
@@ -1769,7 +1778,10 @@ ${explainContext}
 
 ${instructionText}
 
-質問に対する回答を生成してください。見つからない場合は「お探しの内容に直接該当する条文は見つかりませんでした。」と記載してください。
+まず最初に、以下の形式で要約を1行で記載してください：
+【要約】質問内容と言及する条文（条文番号＋見出し）を簡潔に要約（例：「不法行為による損害賠償について、民法709条（不法行為による損害賠償）、710条（財産以外の損害の賠償）を説明」）
+
+その後、改行して本文の回答を生成してください。見つからない場合は「お探しの内容に直接該当する条文は見つかりませんでした。」と記載してください。
 `;
 
       // 過去の会話履歴を構築
@@ -1974,12 +1986,25 @@ ${instructionText}
         ...additionalMentionedArticles
       ];
 
+      // 回答から要約を分離（冒頭の【要約】行を抽出）
+      let displayAnswer = answer;
+      let summary = '';
+      const summaryMatch = answer.match(/^【要約】(.+?)(?:\n|$)/);
+      if (summaryMatch) {
+        summary = summaryMatch[1].trim();
+        displayAnswer = answer.replace(/^【要約】.+?\n+/, '').trim();
+        console.log('📝 要約抽出:', summary);
+      } else {
+        console.log('⚠️ 要約が見つかりませんでした。回答冒頭:', answer.slice(0, 200));
+      }
+
       // ストリーミングで作成した一時エントリを最終データで更新
       setConversations(prev => prev.map(conv =>
         conv.id === tempConvId
           ? {
               ...conv,
-              answer: answer,
+              answer: displayAnswer,
+              summary: summary,
               relevantArticles: displayArticles,
               refsMap: refsMap,
               isStreaming: false

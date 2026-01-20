@@ -563,7 +563,7 @@ export default {
     if (url.pathname === '/api/classify') {
       try {
         const startTime = Date.now();
-        const { query, conversationHistory } = await request.json();
+        const { query, previousSummary, conversationHistory } = await request.json();
         const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
 
         if (!CLAUDE_API_KEY) {
@@ -572,15 +572,19 @@ export default {
           });
         }
 
-        // 会話履歴から文脈を構築
+        // 会話履歴から文脈を構築（要約ベース）
         let contextText = '';
+        if (previousSummary) {
+          contextText = `\n【直前の会話の要約】\n${previousSummary}\n`;
+        }
         if (conversationHistory && conversationHistory.length > 0) {
           const recentConvs = conversationHistory.slice(-2);
-          contextText = '\n【直近の会話履歴】\n';
+          contextText += '\n【会話履歴】\n';
           recentConvs.forEach(conv => {
             contextText += `Q: ${conv.question}\n`;
-            const shortAnswer = conv.answer.length > 200 ? conv.answer.substring(0, 200) + '...' : conv.answer;
-            contextText += `A: ${shortAnswer}\n\n`;
+            if (conv.summary) {
+              contextText += `要約: ${conv.summary}\n\n`;
+            }
           });
         }
 
@@ -604,7 +608,7 @@ ${query}
 
 注意：
 - directの場合、queriesには入力をそのまま1つだけ入れてください
-- legalの場合、queriesには3つの異なる検索クエリを生成してください
+- legalの場合、queriesには3つの異なる検索クエリを生成してください。会話履歴がある場合は、その文脈を考慮してクエリを生成してください（例：前の話題が「不法行為」なら「時効は？」→「不法行為の時効」）
 - greetingの場合、queriesは空配列、greeting_responseに返答を入れてください`;
 
         const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -707,7 +711,7 @@ ${query}
           },
           body: JSON.stringify({
             model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 2000,
+            max_tokens: 3000,
             stream: true,
             system: system || '',
             messages: messages

@@ -10,6 +10,39 @@ const WORKER_URL = 'https://morning-surf-f117.ikeda-250.workers.dev';
 // 全法令の名前→ID マッピング（8,878法令）
 const COMMON_LAW_IDS = ALL_LAW_IDS;
 
+// 施行令・施行規則→親法令のマッピング（「法第X条」の解決用）
+const PARENT_LAW_MAP = {
+  '会社計算規則': '会社法',
+  '会社法施行令': '会社法',
+  '会社法施行規則': '会社法',
+  '民法施行規則': '民法',
+  '所得税法施行令': '所得税法',
+  '所得税法施行規則': '所得税法',
+  '法人税法施行令': '法人税法',
+  '法人税法施行規則': '法人税法',
+  '消費税法施行令': '消費税法',
+  '消費税法施行規則': '消費税法',
+  '相続税法施行令': '相続税法',
+  '相続税法施行規則': '相続税法',
+  '租税特別措置法施行令': '租税特別措置法',
+  '租税特別措置法施行規則': '租税特別措置法',
+  '金融商品取引法施行令': '金融商品取引法',
+  '民事訴訟規則': '民事訴訟法',
+  '刑事訴訟規則': '刑事訴訟法',
+  '破産規則': '破産法',
+  '民事再生規則': '民事再生法',
+  '会社更生規則': '会社更生法',
+  '不動産登記規則': '不動産登記法',
+  '不動産登記令': '不動産登記法',
+  '商業登記規則': '商業登記法',
+  '労働基準法施行規則': '労働基準法',
+  '労働契約法施行規則': '労働契約法',
+  '特許法施行令': '特許法',
+  '特許法施行規則': '特許法',
+  '著作権法施行令': '著作権法',
+  '著作権法施行規則': '著作権法',
+};
+
 // ===== 参照条文取得（e-Gov API経由）=====
 // lawIdがない場合はlawName（法令名）で検索
 // 漢数字をアラビア数字に変換（fetchReferencedArticle用）
@@ -56,6 +89,7 @@ const numToKanji = (num) => {
 
 const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
   try {
+    console.log(`🔍 参照条文取得: lawId=${lawId}, articleNum=${articleNum}, lawName=${lawName}`);
     // lawIdがない場合、lawNameから解決を試みる
     let resolvedLawId = lawId;
     if (!resolvedLawId && lawName) {
@@ -130,10 +164,11 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
         article: result.article  // そのまま使用
       };
     }
-    throw new Error('条文が見つかりませんでした');
+    console.warn(`⚠️ 条文が見つかりませんでした: lawId=${lawId}, articleNum=${articleNum}, lawName=${lawName}`);
+    return null;
   } catch (err) {
-    console.error('参照条文取得エラー:', err);
-    throw err;
+    console.error('参照条文取得エラー:', err, { lawId, articleNum, lawName });
+    return null;  // エラーでもnullを返して処理継続
   }
 };
 
@@ -145,11 +180,40 @@ const ARTICLE_REF_PATTERN = /第([一二三四五六七八九十百千〇]+|\d+)
 // 法令名は2文字以上（「法」「令」単独を除外）
 const OTHER_LAW_REF_PATTERN = /([\u4e00-\u9fff]{2,}(?:法|令|規則|条例))第([一二三四五六七八九十百千〇]+|\d+)条(?:の([一二三四五六七八九十〇]+|\d+))?(?:第([一二三四五六七八九十]+|\d+)(?:項|号))?/g;
 
+// 特殊な省令・規則 → 親法令マッピング
+// 「○○法施行規則」形式ではない規則のための静的マッピング
+const SPECIAL_PARENT_LAW_MAP = {
+  '会社計算規則': { '法': '会社法', '令': '会社法施行令' },
+  '会社法施行規則': { '法': '会社法', '令': '会社法施行令' },
+  '電子公告規則': { '法': '会社法', '令': '会社法施行令' },
+  '商業登記規則': { '法': '商業登記法', '令': '商業登記法施行令' },
+  '不動産登記規則': { '法': '不動産登記法', '令': '不動産登記法施行令' },
+  '戸籍法施行規則': { '法': '戸籍法', '令': '戸籍法施行令' },
+  '民事執行規則': { '法': '民事執行法', '令': '民事執行法施行令' },
+  '民事保全規則': { '法': '民事保全法', '令': '民事保全法施行令' },
+  '破産規則': { '法': '破産法', '令': '破産法施行令' },
+  '民事再生規則': { '法': '民事再生法', '令': '民事再生法施行令' },
+  '会社更生規則': { '法': '会社更生法', '令': '会社更生法施行令' },
+  '供託規則': { '法': '供託法', '令': '供託法施行令' },
+  '法人税法施行規則': { '法': '法人税法', '令': '法人税法施行令' },
+  '所得税法施行規則': { '法': '所得税法', '令': '所得税法施行令' },
+  '消費税法施行規則': { '法': '消費税法', '令': '消費税法施行令' },
+  '相続税法施行規則': { '法': '相続税法', '令': '相続税法施行令' },
+  '地方税法施行規則': { '法': '地方税法', '令': '地方税法施行令' },
+  '租税特別措置法施行規則': { '法': '租税特別措置法', '令': '租税特別措置法施行令' },
+};
+
 // 法令名から親法令情報を動的に生成（施行令・施行規則用）
 // APIから取得した parent_law_info がない場合のフォールバック
 const getParentLawInfo = (lawTitle) => {
   if (!lawTitle) return null;
-  // 「○○法施行令」「○○法施行規則」から親法令名を抽出
+
+  // 1. 特殊マッピングをチェック
+  if (SPECIAL_PARENT_LAW_MAP[lawTitle]) {
+    return SPECIAL_PARENT_LAW_MAP[lawTitle];
+  }
+
+  // 2. 「○○法施行令」「○○法施行規則」から親法令名を抽出
   const shikoPattern = lawTitle.match(/^(.+法)施行(令|規則)$/);
   if (shikoPattern) {
     const parentLawName = shikoPattern[1];
@@ -158,6 +222,17 @@ const getParentLawInfo = (lawTitle) => {
       '令': parentLawName + '施行令'
     };
   }
+
+  // 3. 「○○規則」で終わる場合、対応する法令を探す（最後の手段）
+  // 例: 「○○法施行規則」ではないが「○○規則」のパターン
+  const kisokuPattern = lawTitle.match(/^(.+)規則$/);
+  if (kisokuPattern) {
+    const baseName = kisokuPattern[1];
+    // 「○○計算規則」「○○登記規則」などは親法令が異なるので個別対応が必要
+    // ここでは対応できないのでnullを返す（SPECIAL_PARENT_LAW_MAPに追加すべき）
+    console.log(`ℹ️ 規則の親法令が不明: ${lawTitle} - SPECIAL_PARENT_LAW_MAPへの追加を検討`);
+  }
+
   return null;
 };
 
@@ -1007,13 +1082,16 @@ export default function App() {
       }
     }
 
+    // 親法令情報を取得（「法第X条」→ 親法令へのリンク用）
+    const parentLawInfo = getParentLawInfo(currentLawTitle);
+
     if (!text || !refs || refs.length === 0) {
-      return renderTextWithArticleLinks(text, currentLawId, currentLawTitle, null, currentArticleNum);
+      return renderTextWithArticleLinks(text, currentLawId, currentLawTitle, parentLawInfo, currentArticleNum);
     }
     // この項に対応するrefsを抽出
     const paragraphRefs = refs.filter(r => r.paragraph === paragraphNum);
     if (paragraphRefs.length === 0) {
-      return renderTextWithArticleLinks(text, currentLawId, currentLawTitle, null, currentArticleNum);
+      return renderTextWithArticleLinks(text, currentLawId, currentLawTitle, parentLawInfo, currentArticleNum);
     }
     // 位置でソート
     const sortedRefs = [...paragraphRefs].sort((a, b) => (a.start || 0) - (b.start || 0));
@@ -1029,7 +1107,7 @@ export default function App() {
       }
     }
     if (mergedRefs.length === 0) {
-      return renderTextWithArticleLinks(text, currentLawId, currentLawTitle, null, currentArticleNum);
+      return renderTextWithArticleLinks(text, currentLawId, currentLawTitle, parentLawInfo, currentArticleNum);
     }
     // テキストを分割してリンク化
     const parts = [];
@@ -1037,7 +1115,7 @@ export default function App() {
     for (const ref of mergedRefs) {
       if (ref.start > lastIndex) {
         const beforeText = text.slice(lastIndex, ref.start);
-        const linkedBefore = renderTextWithArticleLinks(beforeText, currentLawId, currentLawTitle, null, currentArticleNum);
+        const linkedBefore = renderTextWithArticleLinks(beforeText, currentLawId, currentLawTitle, parentLawInfo, currentArticleNum);
         parts.push(<React.Fragment key={`before-${ref.start}`}>{linkedBefore}</React.Fragment>);
       }
       const linkText = text.slice(ref.start, ref.end);
@@ -1058,7 +1136,7 @@ export default function App() {
     }
     if (lastIndex < text.length) {
       const afterText = text.slice(lastIndex);
-      const linkedAfter = renderTextWithArticleLinks(afterText, currentLawId, currentLawTitle, null, currentArticleNum);
+      const linkedAfter = renderTextWithArticleLinks(afterText, currentLawId, currentLawTitle, parentLawInfo, currentArticleNum);
       parts.push(<React.Fragment key={`after-${lastIndex}`}>{linkedAfter}</React.Fragment>);
     }
   return parts;
@@ -1715,9 +1793,28 @@ ${articleContext}
         }
         explainContext += `\n`;
         item.article.paragraphs.forEach(p => {
+          // 項の本文（sentences）
           p.sentences.forEach(s => {
             explainContext += `${p.num !== "1" ? p.num + " " : ""}${s.text}\n`;
           });
+          // 号（items）がある場合は追加
+          if (p.items && p.items.length > 0) {
+            p.items.forEach(it => {
+              const itemLabel = it.item_title || it.item_num || '';
+              it.sentences?.forEach(s => {
+                explainContext += `  ${itemLabel} ${s.text}\n`;
+              });
+              // 号の中のsub_items（イ、ロ、ハ等）がある場合
+              if (it.sub_items && it.sub_items.length > 0) {
+                it.sub_items.forEach(sub => {
+                  const subLabel = sub.sub_item_title || sub.sub_item_num || '';
+                  sub.sentences?.forEach(s => {
+                    explainContext += `    ${subLabel} ${s.text}\n`;
+                  });
+                });
+              }
+            });
+          }
         });
 
         // 参照情報を追加
@@ -1743,9 +1840,28 @@ ${articleContext}
           if (refArt.article.caption) explainContext += ` ${refArt.article.caption}`;
           explainContext += '\n';
           refArt.article.paragraphs?.forEach(p => {
+            // 項の本文
             p.sentences?.forEach(s => {
               explainContext += `${p.num !== "1" ? p.num + " " : ""}${s.text}\n`;
             });
+            // 号（items）がある場合は追加
+            if (p.items && p.items.length > 0) {
+              p.items.forEach(it => {
+                const itemLabel = it.item_title || it.item_num || '';
+                it.sentences?.forEach(s => {
+                  explainContext += `  ${itemLabel} ${s.text}\n`;
+                });
+                // sub_items（イ、ロ、ハ等）
+                if (it.sub_items && it.sub_items.length > 0) {
+                  it.sub_items.forEach(sub => {
+                    const subLabel = sub.sub_item_title || sub.sub_item_num || '';
+                    sub.sentences?.forEach(s => {
+                      explainContext += `    ${subLabel} ${s.text}\n`;
+                    });
+                  });
+                }
+              });
+            }
           });
         }
       }
@@ -1867,12 +1983,32 @@ ${instructionText}
       // 法令名として無効なパターン（「同法」「本法」「前法」など）
       const invalidLawNames = ['同法', '本法', '前法', '同法律', '本法律', '前法律', '同令', '本令', '前令', '同規則', '本規則', '前規則'];
 
+      // 選定条文から親法令を特定（「法第X条」の解決用）
+      // 例：選定条文に「会社計算規則」があれば、「法」→「会社法」と解釈
+      let detectedParentLaw = null;
+      for (const item of selectedArticles) {
+        const parentLaw = PARENT_LAW_MAP[item.law.law_title];
+        if (parentLaw) {
+          detectedParentLaw = parentLaw;
+          console.log(`📚 親法令検出: ${item.law.law_title} → ${parentLaw}`);
+          break;
+        }
+      }
+
       for (const pattern of mentionPatterns) {
         let match;
         while ((match = pattern.exec(answer)) !== null) {
-          const lawName = match[1].trim();
+          let lawName = match[1].trim();
           // 無効な法令名はスキップ
           if (invalidLawNames.includes(lawName)) {
+            continue;
+          }
+          // 「法」単体の場合、親法令に変換
+          if (lawName === '法' && detectedParentLaw) {
+            lawName = detectedParentLaw;
+            console.log(`🔄 「法」→「${detectedParentLaw}」に変換`);
+          } else if (lawName === '法') {
+            // 親法令が特定できない場合はスキップ
             continue;
           }
           // アラビア数字を漢数字に変換して統一
@@ -1987,15 +2123,52 @@ ${instructionText}
       ];
 
       // 回答から要約を分離（冒頭の【要約】行を抽出）
+      // 【要約】の後に改行がある場合も対応
       let displayAnswer = answer;
       let summary = '';
-      const summaryMatch = answer.match(/^【要約】(.+?)(?:\n|$)/);
-      if (summaryMatch) {
+
+      // パターン1: 【要約】の後に同一行でテキストが続く場合
+      const summaryMatch = answer.match(/^【要約】[ \t]*([^\n]+)(?:\n|$)/);
+      if (summaryMatch && summaryMatch[1].trim()) {
         summary = summaryMatch[1].trim();
-        displayAnswer = answer.replace(/^【要約】.+?\n+/, '').trim();
-        console.log('📝 要約抽出:', summary);
+        displayAnswer = answer.replace(/^【要約】[ \t]*[^\n]+\n?/, '').trim();
+        console.log('📝 要約抽出(同一行):', summary);
       } else {
-        console.log('⚠️ 要約が見つかりませんでした。回答冒頭:', answer.slice(0, 200));
+        // パターン2: 【要約】の後に改行があり、次の行から要約が始まる場合
+        const multilineMatch = answer.match(/^【要約】\s*\n([\s\S]+?)(?:\n\n|\n(?=[\d１-９一-九]))/);
+        if (multilineMatch) {
+          summary = multilineMatch[1].trim().replace(/\n/g, ' ');
+          displayAnswer = answer.replace(/^【要約】\s*\n[\s\S]+?(?:\n\n|\n(?=[\d１-９一-九]))/, '').trim();
+          console.log('📝 要約抽出(複数行):', summary);
+        } else {
+          // フォールバック: 行単位で処理
+          const lines = answer.split('\n');
+          if (lines[0].startsWith('【要約】')) {
+            let summaryLines = [];
+            let i = 0;
+            // 【要約】行自体にテキストがあれば追加
+            const firstLineText = lines[0].replace('【要約】', '').trim();
+            if (firstLineText) {
+              summaryLines.push(firstLineText);
+            }
+            // 次の行から空行までを要約として収集
+            for (i = 1; i < lines.length; i++) {
+              if (lines[i].trim() === '') {
+                break;
+              }
+              summaryLines.push(lines[i].trim());
+            }
+            if (summaryLines.length > 0) {
+              summary = summaryLines.join(' ').trim();
+              displayAnswer = lines.slice(i).join('\n').trim();
+              console.log('📝 要約抽出(フォールバック):', summary);
+            } else {
+              console.log('⚠️ 要約が見つかりませんでした。回答冒頭:', answer.slice(0, 200));
+            }
+          } else {
+            console.log('⚠️ 要約が見つかりませんでした。回答冒頭:', answer.slice(0, 200));
+          }
+        }
       }
 
       // ストリーミングで作成した一時エントリを最終データで更新

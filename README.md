@@ -1,167 +1,130 @@
-# 条文くん - GitHub Pages版
+# 条文くん (Joubun-kun)
 
-AIを使った法令検索アプリ（完全ブラウザ内動作）
+AIを活用した日本法令検索・解説アプリケーション
 
-## 🎯 特徴
+**URL**: https://joubun-kun.pages.dev
 
-- ✅ 完全ブラウザ内動作（サーバー不要）
-- ✅ Embedding + BM25 ハイブリッド検索
-- ✅ Claude APIで自然言語解説
-- ✅ APIキーは各ユーザーがlocalStorageで管理
-- ✅ XSS対策完備（textContentのみ使用）
+## 特徴
 
-## 🔐 セキュリティ
+- **セマンティック検索**: Cloudflare Vectorizeによるベクトル検索で、自然言語での法令検索が可能
+- **AI解説**: Claude Sonnet 4による分かりやすい法令解説
+- **参照条文表示**: 関連する参照先・参照元条文を自動取得
+- **全法令対応**: 日本の現行法令約9,000件に対応
+- **レスポンシブUI**: PC・スマホ両対応
 
-### APIキー管理
-- localStorageに保存（ブラウザから確認可能）
-- 各ユーザーが個別に設定
-- コードに埋め込まれていない
+## アーキテクチャ
 
-### XSS対策
-- ユーザー入力は`innerHTML`使用禁止
-- 全て`textContent`で安全に表示
-- サニタイゼーション不要（HTMLとして解釈しない）
-
-## 📦 セットアップ
-
-### 1. リポジトリクローン
-
-```bash
-git clone https://github.com/YOUR_USERNAME/joubun-kun.git
-cd joubun-kun
+```
+┌─────────────────┐     ┌──────────────────────────────────────┐
+│  フロントエンド  │     │         Cloudflare Workers           │
+│  (React/Vite)   │────▶│  - /api/search (Vectorize検索)       │
+│                 │     │  - /api/chat (Claude API)            │
+│  Cloudflare     │◀────│  - /api/refs (参照条文取得)          │
+│  Pages          │     │  - /api/articles (条文内容取得)      │
+└─────────────────┘     └──────────────────────────────────────┘
+                                        │
+                        ┌───────────────┼───────────────┐
+                        ▼               ▼               ▼
+                ┌───────────┐   ┌───────────┐   ┌───────────┐
+                │ Vectorize │   │    R2     │   │ Claude    │
+                │ (ベクトル │   │ (法令JSON │   │   API     │
+                │  検索)    │   │  ストレージ) │   │           │
+                └───────────┘   └───────────┘   └───────────┘
 ```
 
-### 2. 依存関係インストール
+## 技術スタック
+
+### フロントエンド
+- React 18
+- Vite
+- Tailwind CSS
+- Cloudflare Pages
+
+### バックエンド
+- Cloudflare Workers
+- Cloudflare Vectorize (ベクトル検索)
+- Cloudflare R2 (オブジェクトストレージ)
+- Claude API (Anthropic)
+
+### データ
+- 法令データ: e-Gov法令APIから取得・加工
+- ベクトル埋め込み: text-embedding-3-small (OpenAI)
+- 参照関係: lawtext-refsから生成
+
+## ローカル開発
 
 ```bash
+# 依存関係インストール
 npm install
-```
 
-### 3. JSONファイル準備（後で実施）
-
-```bash
-# K:\laws_chunk_embeddings のファイルを public/data/ にコピー
-# または Git LFS でコミット
-```
-
-### 4. ONNXモデル準備（後で実施）
-
-```bash
-# K:\ONNX のファイルを public/models/ にコピー
-```
-
-## 🚀 開発
-
-```bash
+# 開発サーバー起動
 npm run dev
-```
 
-http://localhost:5173 でアクセス
-
-## 📦 ビルド
-
-```bash
+# ビルド
 npm run build
 ```
 
-`dist/` フォルダにビルド成果物が生成されます。
+## デプロイ
 
-## 🌐 GitHub Pagesデプロイ
-
-### 方法1: GitHub Actions（自動）
-
-1. GitHubリポジトリ作成
-2. Settings → Pages → Source: GitHub Actions
-3. コミット & プッシュ
-
-```bash
-git add .
-git commit -m "Initial commit"
-git push origin main
-```
-
-→ 自動でビルド & デプロイ！
-
-### 方法2: 手動デプロイ
-
+### フロントエンド (Cloudflare Pages)
 ```bash
 npm run build
-# dist/ フォルダを GitHub Pages にアップロード
+npx wrangler pages deploy dist --project-name=joubun-kun
 ```
 
-## 📁 プロジェクト構成
-
-```
-joubun-kun-web/
-├── .github/
-│   └── workflows/
-│       └── deploy.yml       # GitHub Actions設定
-├── src/
-│   ├── main.jsx             # エントリーポイント
-│   └── App.jsx              # メインアプリ
-├── public/
-│   ├── data/                # JSONファイル（後で追加）
-│   └── models/              # ONNXモデル（後で追加）
-├── package.json
-├── vite.config.js
-└── README.md
+### バックエンド (Cloudflare Workers)
+```bash
+npx wrangler deploy
 ```
 
-## 🔧 使い方
+## データ構成
 
-### 初回アクセス
+### R2バケット (joubun-kun-data)
+```
+├── law_chunk_map.json          # 法令ID → チャンク番号マップ
+├── laws_chunk_XXX_light.json   # 法令データチャンク（約300個）
+├── large_law_articles_v2/      # 大規模法令の条文単位ファイル
+│   ├── 332AC0000000026/        # 租税特別措置法
+│   ├── 129AC0000000089/        # 民法
+│   └── ...
+└── refs_chunks/                # 参照条文データ
+    ├── refs_index.json         # 法令ID → チャンク番号
+    └── refs_chunk_XXX.json     # 参照データチャンク
+```
 
-1. アプリにアクセス
-2. 設定ボタンクリック
-3. Claude APIキーを入力
-4. 保存
+### Vectorize (law-embeddings)
+- 約50万件の条文ベクトル
+- メタデータ: law_id, law_title, article_title, caption
 
-### APIキー取得
+## 主要ファイル
 
-1. https://console.anthropic.com/ にアクセス
-2. 「API Keys」→「Create Key」
-3. 生成されたキーをコピー
+| ファイル | 説明 |
+|---------|------|
+| `src/App.jsx` | フロントエンドメインコンポーネント |
+| `cloudflare-worker.js` | Workers APIエンドポイント |
+| `wrangler.jsonc` | Workers設定 |
+| `src/lawIds.js` | 法令名→法令IDマッピング（8,878件） |
 
-### 検索
-
-1. 質問を入力
-2. 送信ボタンクリック
-3. AI解説 + 関連条文が表示
-
-## 📝 TODO（JSONファイル準備後）
-
-- [ ] JSONファイルを `public/data/` に配置
-- [ ] ONNXモデルを `public/models/` に配置
-- [ ] Git LFS でコミット
-- [ ] GitHub Pagesにデプロイ
-- [ ] テスト
-
-## 💰 コスト
+## コスト目安
 
 | 項目 | 費用 |
-|---|---|
-| GitHub Pages | 0円（100GB/月） |
-| Git LFS | $5/月（データ1.7GB） |
-| Claude API | 従量課金（~60円/月） |
+|------|------|
+| Cloudflare Pages | 無料 |
+| Cloudflare Workers | 無料枠内 |
+| Cloudflare R2 | 無料枠内（10GB） |
+| Cloudflare Vectorize | 無料枠内 |
+| Claude API | 約4-6円/検索 |
 
-## ⚠️ 注意事項
+## 注意事項
 
-### APIキーについて
+- Claude APIキーは各ユーザーが自分で設定
+- APIキーはlocalStorageに保存（ブラウザごと）
+- 法令データは定期的に更新が必要
 
-- localStorageに保存されます
-- ブラウザのDevToolsから確認可能です
-- 信頼できるユーザーのみに共有してください
-
-### セキュリティ
-
-- XSS攻撃対策済み（textContentのみ使用）
-- ユーザー入力はHTMLとして解釈されません
-- APIキーは各ユーザーが自己管理
-
-## 📄 ライセンス
+## ライセンス
 
 MIT
 
-## 👤 作成者
+## 作成者
 
 司法書士法人そうぞう

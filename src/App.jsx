@@ -526,6 +526,11 @@ const calculateConversationTokens = (conversations) => {
 
 // AI解説テキストを見やすくフォーマット
 const formatExplanation = (text, onArticleClick) => {
+  // ストリーミング中も含め、【要約】行を表示から除去
+  if (text.startsWith('【要約】')) {
+    text = text.replace(/^【要約】[^\n]*\n?/, '').trim();
+  }
+
   // Markdownテーブルを先にHTMLテーブルに変換
   const parseMarkdownTable = (text) => {
     const lines = text.split('\n');

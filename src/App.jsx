@@ -1937,8 +1937,8 @@ ${instructionText}
         throw apiError;
       }
 
-      // 【第6段階】説明文から言及された条文を抽出して取得
-      setProcessingStep('📖 言及条文を取得中...');
+      // 【第6段階】説明文から言及された条文を抽出してフィルタリング
+      setProcessingStep('📖 条文を整理中...');
       setProgress(95);
 
       // 説明文から「【法令名 第X条】」「法令名第X条」などのパターンを抽出
@@ -2043,64 +2043,6 @@ ${instructionText}
         isReference: true
       }));
 
-      // まだ取得できていない言及条文を検索して取得
-      const newMentions = [...mentionedInAnswer].filter(key => {
-        const [lawName, articleTitle] = key.split('_');
-        // 選定条文にない
-        const inSelected = selectedArticles.some(item =>
-          item.law.law_title === lawName && item.article.title === articleTitle
-        );
-        // 参照条文にない
-        const inRefs = Object.values(refArticlesData).some(art =>
-          art.law_title === lawName && art.article?.title === articleTitle
-        );
-        return !inSelected && !inRefs;
-      });
-
-      let additionalMentionedArticles = [];
-      if (newMentions.length > 0) {
-        try {
-          const searchPromises = newMentions.slice(0, 10).map(async (key) => {
-            const [lawName, articleTitle] = key.split('_');
-            const searchQuery = `${lawName} ${articleTitle}`;
-            const response = await fetch(`${WORKER_URL}/search`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                queries: [searchQuery],
-                originalQuery: searchQuery,
-                topN: 1
-              })
-            });
-            if (response.ok) {
-              const data = await response.json();
-              if (data.results && data.results.length > 0) {
-                const result = data.results[0];
-                // 条文タイトルが一致し、paragraphsがあれば返す
-                // 法令名も確認（部分一致でOK）
-                const titleMatch = result.article.title === articleTitle;
-                const lawMatch = result.law.law_title.includes(lawName) || lawName.includes(result.law.law_title);
-                if (titleMatch && lawMatch && result.article.paragraphs?.length > 0) {
-                  return {
-                    article: result.article,
-                    lawData: result.law,
-                    similarity: 0,
-                    isReference: true,
-                    isMentioned: true
-                  };
-                }
-              }
-            }
-            return null;
-          });
-
-          const results = await Promise.all(searchPromises);
-          additionalMentionedArticles = results.filter(r => r !== null);
-        } catch (e) {
-          console.error('⚠️ 追加言及条文取得エラー:', e);
-        }
-      }
-
       // refsDataをlaw_id + article_titleでアクセスできるMapに変換
       const refsMap = {};
       refsData.forEach(r => {
@@ -2111,15 +2053,13 @@ ${instructionText}
       // 説明文で言及された条文のみを表示
       // 1. 選定条文のうち言及されたもの（青）
       // 2. 参照条文のうち言及されたもの（オレンジ）
-      // 3. 追加で取得した言及条文（緑）
       const displayArticles = [
         ...mentionedSelectedArticles.map(item => ({
           article: item.article,
           lawData: item.law,
           similarity: item.similarity
         })),
-        ...mentionedRefArticles,
-        ...additionalMentionedArticles
+        ...mentionedRefArticles
       ];
 
       // 回答から要約を分離（冒頭の【要約】行を抽出）
@@ -2377,21 +2317,16 @@ ${instructionText}
                               {conv.relevantArticles.map((item, index) => (
                                 <div key={`${item.lawData.law_id}-${item.article.number}-${index}`}
                                      data-article-id={`${item.lawData.law_title}-${item.article.title}`}
-                                     className={`article-card bg-white rounded-lg border-2 transition-all p-2 sm:p-4 ${item.isMentioned ? 'border-green-200 hover:border-green-300' : item.isReference ? 'border-orange-200 hover:border-orange-300' : 'border-blue-100 hover:border-blue-300'}`}>
+                                     className={`article-card bg-white rounded-lg border-2 transition-all p-2 sm:p-4 ${item.isReference ? 'border-orange-200 hover:border-orange-300' : 'border-blue-100 hover:border-blue-300'}`}>
                                   <div className="flex items-start justify-between">
                                     <div className="flex-grow">
                                       <div className="flex flex-wrap items-center gap-2 mb-2">
-                                        {item.isMentioned && (
-                                          <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full font-semibold">
-                                            言及
-                                          </span>
-                                        )}
-                                        {item.isReference && !item.isMentioned && (
+                                        {item.isReference && (
                                           <span className="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full font-semibold">
                                             参照
                                           </span>
                                         )}
-                                        <span className={`text-xs ${item.isMentioned ? 'bg-gradient-to-r from-green-500 to-green-600' : item.isReference ? 'bg-gradient-to-r from-orange-500 to-orange-600' : 'bg-gradient-to-r from-blue-600 to-blue-700'} text-white px-3 py-1 rounded-full font-semibold`}>
+                                        <span className={`text-xs ${item.isReference ? 'bg-gradient-to-r from-orange-500 to-orange-600' : 'bg-gradient-to-r from-blue-600 to-blue-700'} text-white px-3 py-1 rounded-full font-semibold`}>
                                           {item.lawData.law_title}
                                         </span>
                                         <span className="font-bold text-gray-900 text-sm">
@@ -2468,8 +2403,8 @@ ${instructionText}
                                                         </span>
                                                         <div className="flex-1">
                                                           {subItem.sentences.map((sentence, sIndex) => {
-                                                            // 参照条文・言及条文の場合はリンクなしでプレーンテキスト表示
-                                                            if (item.isReference || item.isMentioned) {
+                                                            // 参照条文の場合はリンクなしでプレーンテキスト表示
+                                                            if (item.isReference) {
                                                               return <span key={sIndex}>{sentence.text}</span>;
                                                             }
                                                             const articleKey = `${item.lawData.law_id}_${item.article.title}`;

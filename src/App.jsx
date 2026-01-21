@@ -669,7 +669,7 @@ const formatExplanation = (text, onArticleClick) => {
     // すべてのパターンを1つの関数で処理して重複マッチを防ぐ
     // 「法律」で終わる法令名にも対応（電子署名及び認証業務に関する法律など）
     content = content.replace(
-      /(\*\*)?【(\*\*)?([^】*]+?(?:法律|法|令|規則|規程))(\*\*)?\s*(第[一二三四五六七八九十百千0-9]+条(?:の[一二三四五六七八九十0-9]+)*)(?:[（(]([^）)]+)[）)])?】(\*\*)?/g,
+      /(\*\*)?【(\*\*)?([^】*]+?(?:法律|法|令|規則|規程))(\*\*)?\s*(第[一二三四五六七八九十百千0-9]+条(?:の[一二三四五六七八九十0-9]+)*(?:第[一二三四五六七八九十0-9]+項)?)(?:[（(]([^）)]+)[）)])?】(\*\*)?/g,
       (match, preBold, innerBoldStart, lawName, innerBoldEnd, articleNum, caption, postBold) => {
         const trimmedLawName = lawName.trim();
         // captionがあれば表示に含める（ただしdata属性には含めない）

@@ -533,12 +533,10 @@ const calculateConversationTokens = (conversations) => {
 
 // AI解説テキストを見やすくフォーマット
 const formatExplanation = (text, onArticleClick) => {
-  // ストリーミング中も含め、【要約】行を表示から除去
-  if (text.startsWith('【要約】')) {
-    text = text.replace(/^【要約】[^\n]*\n?/, '').trim();
-  }
-  // 先頭の区切り線（---）を除去
-  text = text.replace(/^---\s*\n/, '').trim();
+  // ストリーミング中も含め、【要約】行を表示から除去（改行がまだ来ていない途中状態も含む）
+  text = text.replace(/^【要約】[^\n]*(\n|$)/, '').trim();
+  // 全ての区切り線（---）を除去し、連続する空行を整理
+  text = text.replace(/^---\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
 
   // Markdownテーブルを先にHTMLテーブルに変換
   const parseMarkdownTable = (text) => {

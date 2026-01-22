@@ -602,13 +602,17 @@ ${query}
 以下のJSON形式で回答してください（他の文章は不要）：
 {
   "type": "greeting" | "direct" | "legal",
-  "queries": ["検索クエリ1", "検索クエリ2", "検索クエリ3"],  // legalの場合のみ3つのクエリを生成
-  "greeting_response": "挨拶への返答"  // greetingの場合のみ
+  "queries": ["original", "legal", "broad"],
+  "greeting_response": "挨拶への返答"
 }
 
 注意：
 - directの場合、queriesには入力をそのまま1つだけ入れてください
-- legalの場合、queriesには3つの異なる検索クエリを生成してください。会話履歴がある場合は、その文脈を考慮してクエリを生成してください（例：前の話題が「不法行為」なら「時効は？」→「不法行為の時効」）
+- legalの場合、queriesには以下の3つを自然文で生成してください：
+  1. original: ユーザーの質問をそのまま使用（誤字脱字があれば修正）
+  2. legal: 法的論点を明確化した質問（法律用語を補足、「要件」「効果」「適用除外」など）
+  3. broad: 別の言い回し・表現で言い換えた質問（同義語や類語を使い、検索の取りこぼしを防ぐ）
+  ※会話履歴がある場合は文脈を考慮してください
 - greetingの場合、queriesは空配列、greeting_responseに返答を入れてください`;
 
         const response = await fetch('https://api.anthropic.com/v1/messages', {

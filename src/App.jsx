@@ -213,8 +213,8 @@ const getParentLawInfo = (lawTitle) => {
     return SPECIAL_PARENT_LAW_MAP[lawTitle];
   }
 
-  // 2. 「○○法施行令」「○○法施行規則」から親法令名を抽出
-  const shikoPattern = lawTitle.match(/^(.+法)施行(令|規則)$/);
+  // 2. 「○○法施行令」「○○法施行規則」「○○法律施行令」「○○法律施行規則」から親法令名を抽出
+  const shikoPattern = lawTitle.match(/^(.+(?:法律|法))施行(令|規則)$/);
   if (shikoPattern) {
     const parentLawName = shikoPattern[1];
     return {
@@ -227,10 +227,17 @@ const getParentLawInfo = (lawTitle) => {
   // 例: 「○○法施行規則」ではないが「○○規則」のパターン
   const kisokuPattern = lawTitle.match(/^(.+)規則$/);
   if (kisokuPattern) {
-    const baseName = kisokuPattern[1];
     // 「○○計算規則」「○○登記規則」などは親法令が異なるので個別対応が必要
     // ここでは対応できないのでnullを返す（SPECIAL_PARENT_LAW_MAPに追加すべき）
     console.log(`ℹ️ 規則の親法令が不明: ${lawTitle} - SPECIAL_PARENT_LAW_MAPへの追加を検討`);
+  }
+
+  // 4. 「○○法」「○○法律」で終わる法令の場合、「法」は自分自身を指す
+  // 例: 会社法の条文内で「法第○条」→ 会社法第○条
+  if (lawTitle.match(/(法|法律)$/)) {
+    return {
+      '法': lawTitle
+    };
   }
 
   return null;
@@ -530,6 +537,8 @@ const formatExplanation = (text, onArticleClick) => {
   if (text.startsWith('【要約】')) {
     text = text.replace(/^【要約】[^\n]*\n?/, '').trim();
   }
+  // 先頭の区切り線（---）を除去
+  text = text.replace(/^---\s*\n/, '').trim();
 
   // Markdownテーブルを先にHTMLテーブルに変換
   const parseMarkdownTable = (text) => {
@@ -2217,17 +2226,30 @@ ${instructionText}
                         </div>
                         <div className="space-y-2">
                           {searchHistory.slice(0, 10).map((item, idx) => (
-                            <button
-                              key={idx}
-                              onClick={() => {
-                                setQuery(item);
-                                handleSearch(item);
-                              }}
-                              disabled={loading}
-                              className={`w-full text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                            >
-                              🔍 {item}
-                            </button>
+                            <div key={idx} className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  setQuery(item);
+                                  handleSearch(item);
+                                }}
+                                disabled={loading}
+                                className={`flex-1 text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                              >
+                                🔍 {item}
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const newHistory = searchHistory.filter((_, i) => i !== idx);
+                                  setSearchHistory(newHistory);
+                                  localStorage.setItem(SEARCH_HISTORY_STORAGE, JSON.stringify(newHistory));
+                                }}
+                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                title="この履歴を削除"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           ))}
                         </div>
                       </div>

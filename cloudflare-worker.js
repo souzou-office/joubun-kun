@@ -39,6 +39,7 @@ const COMMON_LAW_IDS = {
   '特定受託事業者に係る取引の適正化等に関する法律施行令': '506CO0000000200',
   'フリーランス保護法': '505AC0000000025',
   'フリーランス新法': '505AC0000000025',
+  '地方税法': '325AC0000000226',
 };
 
 // 単一の法令+条文を抽出（後方互換用）
@@ -378,6 +379,20 @@ export default {
             } catch (e) { }
           });
           await Promise.all(kaishahoPromises);
+        }
+
+        // 地方税法（専用ファイルから取得: laws_chiho_zeihow_light.json）
+        const CHIHO_ZEIHOW_ID = '325AC0000000226';
+        if (articlesByLaw.has(CHIHO_ZEIHOW_ID)) {
+          try {
+            const obj = await env.R2.get('laws_chiho_zeihow_light.json');
+            if (obj) {
+              const data = await obj.json();
+              if (data.laws[CHIHO_ZEIHOW_ID]) {
+                lawDataCache[CHIHO_ZEIHOW_ID] = data.laws[CHIHO_ZEIHOW_ID];
+              }
+            }
+          } catch (e) { console.error('地方税法読み込みエラー:', e); }
         }
 
         // LARGE法令（条文単位ファイルから取得）- LARGE と LARGE_075 両方に対応
@@ -856,6 +871,27 @@ ${query}
                 }
               } catch (e) { }
             }
+            continue;
+          }
+
+          // 地方税法の場合
+          const CHIHO_ZEIHOW_ID = '325AC0000000226';
+          if (lawId === CHIHO_ZEIHOW_ID) {
+            try {
+              const obj = await env.R2.get('laws_chiho_zeihow_light.json');
+              if (obj) {
+                const data = await obj.json();
+                const lawData = data.laws[CHIHO_ZEIHOW_ID];
+                if (lawData) {
+                  for (const art of articles) {
+                    const foundArticle = lawData.articles?.find(a => a.title === art.articleTitle);
+                    if (foundArticle) {
+                      results.push({ id: art.originalId, law_id: lawId, law_title: lawData.law_title, article: foundArticle });
+                    }
+                  }
+                }
+              }
+            } catch (e) { }
             continue;
           }
 

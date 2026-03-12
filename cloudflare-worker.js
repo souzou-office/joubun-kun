@@ -81,6 +81,16 @@ function extractMultipleLawInfos(query) {
     const subNumsStr = match[3] || '';  // 例: "の二の四"
     results.push({ lawName, articleNum, subNumsStr });
   }
+
+  // 「〇〇法 別表第X」パターンも抽出（登録免許税法 別表第一 等）
+  const appendixPattern = /([\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ffー]+(?:施行規則|施行令|法律|規則|条例|新法|法|令))[\s]*別表[\s]*(?:第)?[\s]*([\d一二三四五六七八九十]+)/g;
+  while ((match = appendixPattern.exec(normalizedQuery)) !== null) {
+    const lawName = match[1];
+    const numStr = match[2];
+    const appendixNum = /^\d+$/.test(numStr) ? numberToKanji(parseInt(numStr, 10)) : numStr;
+    results.push({ lawName, articleNum: null, subNumsStr: '', appendixTitle: `別表第${appendixNum}` });
+  }
+
   return results;
 }
 
@@ -179,6 +189,8 @@ export default {
 
         // 条文タイトルを生成するヘルパー関数（複数枝番対応）
         const buildArticleTitle = (info) => {
+          // 別表の場合はそのまま返す
+          if (info.appendixTitle) return info.appendixTitle;
           let title = '第' + numberToKanji(info.articleNum) + '条';
           // subNumsStr（「の二の四」等）をそのまま追加、またはアラビア数字を漢数字に変換
           if (info.subNumsStr) {
@@ -195,7 +207,8 @@ export default {
         // 複数条文直接指定の場合：検索結果に該当条文がなければ強制追加
         // （ベクトル検索では「第三百二十三条」のような条文番号はマッチしにくいため）
         for (const info of multipleLawInfos) {
-          if (!info.articleNum || !info.lawName) continue;
+          if (!info.articleNum && !info.appendixTitle) continue;
+          if (!info.lawName) continue;
           const artTitle = buildArticleTitle(info);
 
           // 検索結果に目的の条文があるかチェック
@@ -774,6 +787,11 @@ ${query}
 
         // 条文IDをパース: law_id と article_title に分解
         const parsedArticles = articleIds.map(id => {
+          // 別表パターン（例: "342AC0000000035_別表第一"）
+          const appendixMatch = id.match(/^(.+?)_(別表第[一二三四五六七八九十]+)$/);
+          if (appendixMatch) {
+            return { lawId: appendixMatch[1], articleTitle: appendixMatch[2], originalId: id };
+          }
           const match = id.match(/^(.+?)_(Art(\d+)(?:_(\d+))?)$/);
           if (!match) return null;
           const lawId = match[1];

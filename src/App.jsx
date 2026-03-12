@@ -1964,6 +1964,12 @@ ${instructionText}
         /(?:^|[（(「『\s])([^\s（(「『【】）)」』]+?(?:法律|法|令|規則|規程))\s*第([一二三四五六七八九十百千〇0-9]+)条((?:の[一二三四五六七八九十0-9]+)*)/gm
       ];
 
+      // 別表パターン（「【登録免許税法 別表第一】」「登録免許税法別表第一」等）
+      const appendixPatterns = [
+        /【([^】]+?(?:法律|法|令|規則|規程))\s*別表\s*(?:第\s*)?([一二三四五六七八九十0-9]+)】/g,
+        /(?:^|[（(「『\s])([^\s（(「『【】）)」』]+?(?:法律|法|令|規則|規程))\s*別表\s*(?:第\s*)?([一二三四五六七八九十0-9]+)/gm
+      ];
+
       // アラビア数字を漢数字に変換するヘルパー
       const arabicToKanjiLocal = (str) => {
         if (!str) return str;
@@ -2034,6 +2040,23 @@ ${instructionText}
             });
           }
           const articleTitle = `第${articleNum}条${subNumPart}`;
+          mentionedInAnswer.add(`${lawName}_${articleTitle}`);
+        }
+      }
+
+      // 別表パターンのマッチ処理
+      for (const pattern of appendixPatterns) {
+        let match;
+        while ((match = pattern.exec(answer)) !== null) {
+          let lawName = match[1].trim();
+          if (invalidLawNames.includes(lawName)) continue;
+          if (lawName === '法' && detectedParentLaw) {
+            lawName = detectedParentLaw;
+          } else if (lawName === '法') {
+            continue;
+          }
+          const appendixNum = arabicToKanjiLocal(match[2]);
+          const articleTitle = `別表第${appendixNum}`;
           mentionedInAnswer.add(`${lawName}_${articleTitle}`);
         }
       }
@@ -2368,6 +2391,11 @@ ${instructionText}
                                         <div className="leading-6 bg-gray-50 p-3 rounded text-gray-700 text-sm">
                                           {(item.article.paragraphs || []).length === 0 ? (
                                             <div className="text-gray-400 italic">条文内容を取得中...</div>
+                                          ) : isAppendixTable(item.article.title) ? (
+                                            <div className="max-h-32 overflow-hidden relative">
+                                              <AppendixTableContent text={item.article.paragraphs[0]?.sentences?.[0]?.text?.substring(0, 500)} />
+                                              <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-50 to-transparent"></div>
+                                            </div>
                                           ) : (
                                             <>
                                               {item.article.paragraphs.slice(0, 1).map((paragraph, pIndex) => (
@@ -2385,6 +2413,10 @@ ${instructionText}
                                               )}
                                             </>
                                           )}
+                                        </div>
+                                      ) : isAppendixTable(item.article.title) ? (
+                                        <div className="leading-6 bg-gray-50 p-4 rounded border border-gray-200 text-gray-800 text-sm max-h-[600px] overflow-y-auto">
+                                          <AppendixTableContent text={item.article.paragraphs?.[0]?.sentences?.[0]?.text} />
                                         </div>
                                       ) : (
                                         <div className="leading-6 space-y-3 bg-gray-50 p-4 rounded border border-gray-200 text-gray-800 text-sm">
@@ -2710,6 +2742,130 @@ ${instructionText}
       )}
     </div>
   );
+}
+
+// ===== 別表テキスト整形表示コンポーネント =====
+// フラットテキストを「一」「（一）」「イ」等で改行・インデントして表示
+function AppendixTableContent({ text }) {
+  if (!text) return null;
+
+  // テキストを構造化された行に分割
+  const lines = [];
+  // 「一　」「二　」等の大項目、「（一）」等の中項目、「イ　」「ロ　」等の小項目で分割
+  // 「（注）」も独立行にする
+  const splitPattern = /(?=(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　)|(?=（[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?）)|(?=\s[イロハニホヘトチリヌルヲワカヨタレソツネナラム]　)|(?=（注）)|(?=（[０-９0-9]+）)/;
+
+  // より確実な分割: 正規表現で各項目を検出
+  const itemRegex = /(?:(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　|（([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)）|(?:^|\s)([イロハニホヘトチリヌルヲワカヨタレソツネナラム])　|（注）|（([０-９0-9]+)）)/g;
+
+  let lastIndex = 0;
+  let match;
+  const segments = [];
+
+  // まず先頭のヘッダー部分（「課税範囲...」等）を取得
+  const firstItemMatch = text.match(/(?:^|\s)([一二三四五六七八九十]+)　/);
+  if (firstItemMatch && firstItemMatch.index > 0) {
+    const header = text.substring(0, firstItemMatch.index).trim();
+    if (header) {
+      segments.push({ type: 'header', text: header, level: 0 });
+    }
+    lastIndex = firstItemMatch.index;
+  }
+
+  // 各項目を検出して分割
+  const allItems = [];
+  const itemScanRegex = /(?:(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　)|(（([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)）\s*)|((?:^|\s)([イロハニホヘトチリヌルヲワカヨタレソツネナラム])　)|(（注）)|(（([０-９0-9]+)）\s*)/g;
+
+  let scanMatch;
+  while ((scanMatch = itemScanRegex.exec(text)) !== null) {
+    allItems.push({
+      index: scanMatch.index,
+      fullMatch: scanMatch[0],
+      // 大項目（一、二、三...）
+      majorNum: scanMatch[1],
+      // 中項目（（一）、（二）...）
+      middleNum: scanMatch[3],
+      // 小項目（イ、ロ、ハ...）
+      minorChar: scanMatch[5],
+      // 注
+      isNote: !!scanMatch[6],
+      // 数字項目（（１）、（２）...）
+      digitNum: scanMatch[8],
+    });
+  }
+
+  // 各項目のテキスト範囲を決定
+  for (let i = 0; i < allItems.length; i++) {
+    const item = allItems[i];
+    const nextIndex = i + 1 < allItems.length ? allItems[i + 1].index : text.length;
+    const content = text.substring(item.index, nextIndex).trim();
+
+    if (item.majorNum) {
+      segments.push({ type: 'major', num: item.majorNum, text: content, level: 0 });
+    } else if (item.middleNum) {
+      segments.push({ type: 'middle', num: item.middleNum, text: content, level: 1 });
+    } else if (item.minorChar) {
+      segments.push({ type: 'minor', num: item.minorChar, text: content, level: 2 });
+    } else if (item.isNote) {
+      segments.push({ type: 'note', text: content, level: 1 });
+    } else if (item.digitNum) {
+      segments.push({ type: 'digit', num: item.digitNum, text: content, level: 3 });
+    }
+  }
+
+  // セグメントがなければフォールバック
+  if (segments.length === 0) {
+    return <div className="whitespace-pre-wrap">{text}</div>;
+  }
+
+  const levelStyles = {
+    0: 'ml-0',       // 大項目
+    1: 'ml-4',       // 中項目（（一）等）
+    2: 'ml-8',       // 小項目（イ等）
+    3: 'ml-12',      // 数字項目（（１）等）
+  };
+
+  const labelStyles = {
+    major: 'font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded',
+    middle: 'font-bold text-blue-600 bg-blue-50 px-1 py-0.5 rounded text-xs',
+    minor: 'font-bold text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded text-xs',
+    digit: 'font-bold text-purple-600 bg-purple-50 px-1 py-0.5 rounded text-xs',
+    note: 'text-gray-500 text-xs italic',
+    header: '',
+  };
+
+  return (
+    <div className="space-y-1.5 text-sm">
+      {segments.map((seg, i) => (
+        <div key={i} className={`${levelStyles[seg.level] || 'ml-0'} leading-relaxed`}>
+          {seg.type === 'header' ? (
+            <div className="text-gray-600 text-xs mb-2 pb-1 border-b border-gray-200">{seg.text}</div>
+          ) : (
+            <div className="flex gap-1.5">
+              {seg.num && (
+                <span className={`${labelStyles[seg.type]} flex-shrink-0 h-fit`}>
+                  {seg.type === 'middle' ? `（${seg.num}）` : seg.type === 'digit' ? `（${seg.num}）` : seg.num}
+                </span>
+              )}
+              <span className="flex-1">
+                {/* numラベル部分を除いたテキストを表示 */}
+                {seg.text.replace(/^[\s]*[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?[\s　]+/, '')
+                  .replace(/^（[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?）[\s]*/, '')
+                  .replace(/^[\s]*[イロハニホヘトチリヌルヲワカヨタレソツネナラム][\s　]+/, '')
+                  .replace(/^（注）[\s]*/, '')
+                  .replace(/^（[０-９0-9]+）[\s]*/, '')}
+              </span>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 条文タイトルが別表かどうか判定
+function isAppendixTable(articleTitle) {
+  return articleTitle && articleTitle.startsWith('別表');
 }
 
 // ===== 条文表示コンポーネント（e-Gov API JSON構造用）=====

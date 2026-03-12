@@ -2044,7 +2044,7 @@ ${instructionText}
         }
       }
 
-      // 別表パターンのマッチ処理
+      // 別表パターンのマッチ処理（法令名付き）
       for (const pattern of appendixPatterns) {
         let match;
         while ((match = pattern.exec(answer)) !== null) {
@@ -2058,6 +2058,20 @@ ${instructionText}
           const appendixNum = arabicToKanjiLocal(match[2]);
           const articleTitle = `別表第${appendixNum}`;
           mentionedInAnswer.add(`${lawName}_${articleTitle}`);
+        }
+      }
+
+      // 別表パターン（法令名なし「別表第一」等）→ 選定条文から法令名を推定
+      const standaloneAppendixPattern = /別表\s*(?:第\s*)?([一二三四五六七八九十0-9]+)/g;
+      let saMatch;
+      while ((saMatch = standaloneAppendixPattern.exec(answer)) !== null) {
+        const appendixNum = arabicToKanjiLocal(saMatch[1]);
+        const articleTitle = `別表第${appendixNum}`;
+        // 選定条文に同じ別表があれば、その法令名を使う
+        for (const item of selectedArticles) {
+          if (item.article.title === articleTitle) {
+            mentionedInAnswer.add(`${item.law.law_title}_${articleTitle}`);
+          }
         }
       }
 

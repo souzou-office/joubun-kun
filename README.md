@@ -113,11 +113,6 @@ npx wrangler deploy
 | Cloudflare Vectorize | 無料枠内 |
 | Claude API | 約4-6円/検索 |
 
-## 注意事項
-
-- Claude APIキーは各ユーザーが自分で設定
-- APIキーはlocalStorageに保存（ブラウザごと）
-- 法令データは定期的に更新が必要
 
 ## ライセンス
 

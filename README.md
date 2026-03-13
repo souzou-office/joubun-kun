@@ -2,8 +2,6 @@
 
 AIを活用した日本法令検索・解説アプリケーション
 
-**URL**: https://joubun-kun.pages.dev
-
 ## 特徴
 
 - **セマンティック検索**: Cloudflare Vectorizeによるベクトル検索で、自然言語での法令検索が可能

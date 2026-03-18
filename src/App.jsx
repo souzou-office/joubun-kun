@@ -773,19 +773,26 @@ const formatExplanation = (text, onArticleClick) => {
   });
 };
 
+// Google SDK初期化済みフラグ（コンポーネント間で共有）
+let _googleInitialized = false;
+function setGoogleInitialized() { _googleInitialized = true; }
+
 // Google Sign-Inボタンコンポーネント（SDK読み込みタイミング問題を解決）
 function GoogleSignInButton({ size = 'medium', width, className = '' }) {
   const btnRef = useRef(null);
+  const renderedRef = useRef(false);
   useEffect(() => {
+    renderedRef.current = false;
     let interval;
     function tryRender() {
-      if (!btnRef.current) return;
+      if (!btnRef.current || renderedRef.current) return;
+      if (!_googleInitialized) return;
       if (typeof window.google === 'undefined' || !window.google.accounts || !window.google.accounts.id) return;
-      // SDK ready, render button
       window.google.accounts.id.renderButton(btnRef.current, {
         theme: 'outline', size, text: 'signin_with', locale: 'ja',
         ...(width ? { width } : {}),
       });
+      renderedRef.current = true;
       clearInterval(interval);
     }
     interval = setInterval(tryRender, 300);
@@ -966,6 +973,7 @@ export default function App() {
           },
         });
         googleInitRef.current = true;
+        setGoogleInitialized();
         clearInterval(interval);
       } catch (e) {
         console.error('Google init error:', e);
@@ -2509,19 +2517,12 @@ ${instructionText}
                       ) : (
                         <div className="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs">{authUser.name?.charAt(0)}</div>
                       )}
-                      <span className="text-xs text-gray-600 hidden sm:inline">
-                        {authUser.usageCount}/{authUser.freeLimit}回
-                        {authUser.hasStripe && ' + 従量制'}
-                      </span>
                     </button>
                     {showUserMenu && (
                       <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-2 w-56 z-50">
                         <div className="px-4 py-2 border-b border-gray-100">
                           <p className="font-medium text-sm">{authUser.name}</p>
                           <p className="text-xs text-gray-500">{authUser.email}</p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            検索: {authUser.usageCount}/{authUser.freeLimit}回（無料枠）
-                          </p>
                         </div>
                         {!authUser.hasStripe && authUser.usageCount >= authUser.freeLimit && (
                           <button
@@ -2570,19 +2571,14 @@ ${instructionText}
                   <div className="flex-1 flex items-center justify-center py-12 px-4">
                     <div className="text-center max-w-md">
                       <div className="mb-6">
-                        <img src={logoA} alt="条文くん" className="w-20 h-20 mx-auto mb-4" />
+                        <img src={logoA} alt="条文くん" className="w-24 mx-auto mb-4" />
                         <h2 className="text-xl font-bold text-gray-800 mb-2">条文くんへようこそ</h2>
                         <p className="text-gray-600 text-sm mb-1">AIを活用した法令検索サービス</p>
                         <p className="text-gray-500 text-xs">5回まで無料でお試しいただけます</p>
                       </div>
-                      <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm mb-6">
+                      <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
                         <p className="text-sm text-gray-700 mb-4">Googleアカウントでログインして検索を開始</p>
                         <GoogleSignInButton size="large" className="flex justify-center" />
-                      </div>
-                      <div className="text-sm text-gray-400 space-y-1">
-                        <div>例：「手付金を放棄して契約解除できる？」</div>
-                        <div>例：「株式会社の設立に必要な書類は？」</div>
-                        <div>例：「民法の境界線についての規定を教えて」</div>
                       </div>
                     </div>
                   </div>

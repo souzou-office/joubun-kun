@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { toPng } from 'html-to-image';
 import logoA from '/logo_A.png';
 import logoB from '/logo_B.png';
@@ -773,6 +773,28 @@ const formatExplanation = (text, onArticleClick) => {
   });
 };
 
+// Google Sign-Inボタンコンポーネント（SDK読み込みタイミング問題を解決）
+function GoogleSignInButton({ size = 'medium', width, className = '' }) {
+  const btnRef = useRef(null);
+  useEffect(() => {
+    let interval;
+    function tryRender() {
+      if (!btnRef.current) return;
+      if (typeof window.google === 'undefined' || !window.google.accounts || !window.google.accounts.id) return;
+      // SDK ready, render button
+      window.google.accounts.id.renderButton(btnRef.current, {
+        theme: 'outline', size, text: 'signin_with', locale: 'ja',
+        ...(width ? { width } : {}),
+      });
+      clearInterval(interval);
+    }
+    interval = setInterval(tryRender, 300);
+    tryRender();
+    return () => clearInterval(interval);
+  }, [size, width]);
+  return <div ref={btnRef} className={className}></div>;
+}
+
 export default function App() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -916,7 +938,7 @@ export default function App() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Google Sign-In初期化 & ボタン描画
+  // Google Sign-In SDK初期化（ボタン描画はGoogleSignInButtonコンポーネントで行う）
   const googleInitRef = useRef(false);
   useEffect(() => {
     let interval;
@@ -945,15 +967,6 @@ export default function App() {
         });
         googleInitRef.current = true;
         clearInterval(interval);
-        // ボタン描画
-        ['google-signin-header', 'google-signin-landing'].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) {
-            window.google.accounts.id.renderButton(el, {
-              theme: 'outline', size: 'medium', text: 'signin_with', locale: 'ja',
-            });
-          }
-        });
       } catch (e) {
         console.error('Google init error:', e);
       }
@@ -2534,7 +2547,7 @@ ${instructionText}
                     )}
                   </div>
                 ) : (
-                  <div id="google-signin-header"></div>
+                  <GoogleSignInButton size="medium" />
                 )}
 
                 <button
@@ -2552,70 +2565,85 @@ ${instructionText}
             {/* 会話エリア */}
             <div className="flex-1 overflow-y-auto p-2 sm:p-4 lg:p-6">
               {conversations.length === 0 && (
-                <div className="py-8 px-4 max-w-2xl mx-auto flex flex-col" style={{ maxHeight: 'calc(100vh - 240px)' }}>
-                  {/* 検索履歴（スクロール可能、最大5件表示） */}
-                  <div className="flex-1 overflow-y-auto min-h-0">
-                    {searchHistory.length > 0 ? (
-                      <div className="mb-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-sm font-medium text-gray-600">検索履歴</h3>
-                          <button
-                            onClick={() => {
-                              clearSearchHistory();
-                              setSearchHistory([]);
-                            }}
-                            className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer"
-                          >
-                            履歴をクリア
-                          </button>
-                        </div>
-                        <div className="space-y-2">
-                          {searchHistory.slice(0, 10).map((item, idx) => (
-                            <div key={idx} className="flex items-center gap-2">
-                              <button
-                                onClick={() => {
-                                  setQuery(item);
-                                  handleSearch(item);
-                                }}
-                                disabled={loading}
-                                className={`flex-1 text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                              >
-                                🔍 {item}
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const newHistory = searchHistory.filter((_, i) => i !== idx);
-                                  setSearchHistory(newHistory);
-                                  localStorage.setItem(SEARCH_HISTORY_STORAGE, JSON.stringify(newHistory));
-                                }}
-                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                                title="この履歴を削除"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ))}
-                        </div>
+                !authUser && !bypassKey ? (
+                  /* 未ログイン時：全面ログイン画面 */
+                  <div className="flex-1 flex items-center justify-center py-12 px-4">
+                    <div className="text-center max-w-md">
+                      <div className="mb-6">
+                        <img src={logoA} alt="条文くん" className="w-20 h-20 mx-auto mb-4" />
+                        <h2 className="text-xl font-bold text-gray-800 mb-2">条文くんへようこそ</h2>
+                        <p className="text-gray-600 text-sm mb-1">AIを活用した法令検索サービス</p>
+                        <p className="text-gray-500 text-xs">5回まで無料でお試しいただけます</p>
                       </div>
-                    ) : (
-                      <div className="text-sm text-gray-400 space-y-2 text-center mb-4">
-                        <p className="text-gray-500 mb-4">法的な質問を入力してください</p>
-                        <div>💡 例：「手付金を放棄して契約解除できる？」</div>
-                        <div>💡 例：「株式会社の設立に必要な書類は？」</div>
-                        <div>💡 例：「民法の境界線についての規定を教えて」</div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm mb-6">
+                        <p className="text-sm text-gray-700 mb-4">Googleアカウントでログインして検索を開始</p>
+                        <GoogleSignInButton size="large" className="flex justify-center" />
                       </div>
-                    )}
-                  </div>
-
-                  {/* 未ログイン時のログイン案内（バイパスキー時は非表示） */}
-                  {!authUser && !bypassKey && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4 text-center">
-                      <p className="text-sm text-blue-800 mb-3">検索するにはGoogleアカウントでログインしてください（5回まで無料）</p>
-                      <div id="google-signin-landing" className="flex justify-center"></div>
+                      <div className="text-sm text-gray-400 space-y-1">
+                        <div>例：「手付金を放棄して契約解除できる？」</div>
+                        <div>例：「株式会社の設立に必要な書類は？」</div>
+                        <div>例：「民法の境界線についての規定を教えて」</div>
+                      </div>
                     </div>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  /* ログイン済み or バイパスキー：通常の検索画面 */
+                  <div className="py-8 px-4 max-w-2xl mx-auto flex flex-col" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+                    <div className="flex-1 overflow-y-auto min-h-0">
+                      {searchHistory.length > 0 ? (
+                        <div className="mb-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-medium text-gray-600">検索履歴</h3>
+                            <button
+                              onClick={() => {
+                                clearSearchHistory();
+                                setSearchHistory([]);
+                              }}
+                              className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer"
+                            >
+                              履歴をクリア
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            {searchHistory.slice(0, 10).map((item, idx) => (
+                              <div key={idx} className="flex items-center gap-2">
+                                <button
+                                  onClick={() => {
+                                    setQuery(item);
+                                    handleSearch(item);
+                                  }}
+                                  disabled={loading}
+                                  className={`flex-1 text-left px-4 py-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-sm text-gray-700 ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                                >
+                                  {item}
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const newHistory = searchHistory.filter((_, i) => i !== idx);
+                                    setSearchHistory(newHistory);
+                                    localStorage.setItem(SEARCH_HISTORY_STORAGE, JSON.stringify(newHistory));
+                                  }}
+                                  className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                  title="この履歴を削除"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-400 space-y-2 text-center mb-4">
+                          <p className="text-gray-500 mb-4">法的な質問を入力してください</p>
+                          <div>例：「手付金を放棄して契約解除できる？」</div>
+                          <div>例：「株式会社の設立に必要な書類は？」</div>
+                          <div>例：「民法の境界線についての規定を教えて」</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
               )}
 
               <div className="space-y-8">
@@ -2883,7 +2911,8 @@ ${instructionText}
               </div>
             )}
 
-            {/* 入力エリア */}
+            {/* 入力エリア（未ログイン時は非表示） */}
+            {(authUser || bypassKey) && (
             <div className="bg-white p-2 sm:p-4">
               {/* プロフェッショナルモード切替（トップページ時のみ、入力窓の上に表示） */}
               {conversations.length === 0 && (
@@ -2980,6 +3009,7 @@ ${instructionText}
                 </div>
               )}
             </div>
+            )}
           </div>
         </div>
       </div>

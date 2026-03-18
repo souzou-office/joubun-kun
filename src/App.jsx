@@ -3261,11 +3261,11 @@ ${instructionText}
                   </tr>
                   <tr className="border-b border-gray-200">
                     <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">メールアドレス</td>
-                    <td className="py-2">info@souzouoffice.jp</td>
+                    <td className="py-2">info@souzou-office.jp</td>
                   </tr>
                   <tr className="border-b border-gray-200">
                     <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">ホームページ</td>
-                    <td className="py-2"><a href="https://www.souzouoffice.jp/" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">https://www.souzouoffice.jp/</a></td>
+                    <td className="py-2"><a href="https://www.souzou-office.jp/" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">https://www.souzou-office.jp/</a></td>
                   </tr>
                   <tr className="border-b border-gray-200">
                     <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">販売価格</td>

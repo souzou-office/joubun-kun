@@ -2446,9 +2446,14 @@ ${instructionText}
     }
   };
   // ユーザーメニュー外クリックで閉じる
+  const userMenuRef = useRef(null);
   useEffect(() => {
     if (!showUserMenu) return;
-    const handler = () => setShowUserMenu(false);
+    const handler = (e) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setShowUserMenu(false);
+      }
+    };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }, [showUserMenu]);
@@ -2507,7 +2512,7 @@ ${instructionText}
 
                 {/* 認証エリア */}
                 {authUser ? (
-                  <div className="relative">
+                  <div className="relative" ref={userMenuRef}>
                     <button
                       onClick={() => setShowUserMenu(!showUserMenu)}
                       className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
@@ -2571,7 +2576,7 @@ ${instructionText}
                   <div className="flex-1 flex items-center justify-center py-12 px-4">
                     <div className="text-center max-w-md">
                       <div className="mb-6">
-                        <img src={logoA} alt="条文くん" className="w-24 mx-auto mb-4" />
+                        <img src={logoA} alt="条文くん" className="w-48 mx-auto mb-4" />
                         <h2 className="text-xl font-bold text-gray-800 mb-2">条文くんへようこそ</h2>
                         <p className="text-gray-600 text-sm mb-1">AIを活用した法令検索サービス</p>
                         <p className="text-gray-500 text-xs">5回まで無料でお試しいただけます</p>

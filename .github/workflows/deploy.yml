@@ -19,6 +19,8 @@ jobs:
       - run: npm ci
 
       - run: npm run build
+        env:
+          VITE_GOOGLE_CLIENT_ID: 378263784469-raptg25ha681me08ifr7mg14fgmfnltj.apps.googleusercontent.com
 
       - uses: cloudflare/wrangler-action@v3
         with:

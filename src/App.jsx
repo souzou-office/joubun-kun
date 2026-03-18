@@ -935,30 +935,35 @@ export default function App() {
     }
   };
 
-  // Google Sign-In初期化
+  // Google Sign-In初期化 & ボタン描画
+  const googleInitialized = useRef(false);
   useEffect(() => {
-    if (typeof google !== 'undefined' && google.accounts) {
+    const initGoogle = () => {
+      if (typeof google === 'undefined' || !google.accounts || googleInitialized.current) return;
       google.accounts.id.initialize({
         client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
         callback: handleGoogleLogin,
       });
-    }
-  }, []);
-
-  // Googleログインボタン表示
-  const renderGoogleButton = (elementId) => {
-    if (typeof google !== 'undefined' && google.accounts) {
-      const el = document.getElementById(elementId);
-      if (el) {
-        google.accounts.id.renderButton(el, {
-          theme: 'outline',
-          size: 'medium',
-          text: 'signin_with',
-          locale: 'ja',
-        });
-      }
-    }
-  };
+      googleInitialized.current = true;
+      // ボタン描画
+      ['google-signin-btn', 'google-signin-landing'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          google.accounts.id.renderButton(el, {
+            theme: 'outline',
+            size: 'medium',
+            text: 'signin_with',
+            locale: 'ja',
+          });
+        }
+      });
+    };
+    // SDKがまだ読み込まれていない場合は少し待つ
+    const timer = setTimeout(initGoogle, 500);
+    // SDKロード済みなら即実行
+    initGoogle();
+    return () => clearTimeout(timer);
+  }, [authUser]); // authUser変化時に再描画（ログアウト後にボタンを出すため）
 
   // ログアウト
   const handleLogout = async () => {
@@ -2530,7 +2535,7 @@ ${instructionText}
                     )}
                   </div>
                 ) : (
-                  <div id="google-signin-btn" ref={(el) => { if (el) setTimeout(() => renderGoogleButton('google-signin-btn'), 100); }}></div>
+                  <div id="google-signin-btn"></div>
                 )}
 
                 <button
@@ -2608,7 +2613,7 @@ ${instructionText}
                   {!authUser && !bypassKey && (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4 text-center">
                       <p className="text-sm text-blue-800 mb-3">検索するにはGoogleアカウントでログインしてください（5回まで無料）</p>
-                      <div id="google-signin-landing" ref={(el) => { if (el) setTimeout(() => renderGoogleButton('google-signin-landing'), 100); }} className="flex justify-center"></div>
+                      <div id="google-signin-landing" className="flex justify-center"></div>
                     </div>
                   )}
                 </div>

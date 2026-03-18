@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import html2canvas from 'html2canvas';
 import logoA from '/logo_A.png';
 import logoB from '/logo_B.png';
 import { ALL_LAW_IDS } from './lawIds.js';
@@ -794,6 +795,47 @@ export default function App() {
 
   // 最新の会話へのスクロール用ref
   const latestConversationRef = useRef(null);
+  const [exportingConvId, setExportingConvId] = useState(null);
+
+  // スクリーンショットエクスポート
+  const handleExportScreenshot = async (convId) => {
+    const el = document.querySelector(`[data-conv-export-id="${convId}"]`);
+    if (!el) return;
+    setExportingConvId(convId);
+    try {
+      // 一時的にスクロール制限を解除して全体をキャプチャ
+      const scrollContainers = el.querySelectorAll('.lg\\:max-h-\\[calc\\(100vh-180px\\)\\]');
+      const origStyles = [];
+      scrollContainers.forEach(c => {
+        origStyles.push({ maxHeight: c.style.maxHeight, overflow: c.style.overflow });
+        c.style.maxHeight = 'none';
+        c.style.overflow = 'visible';
+      });
+
+      const canvas = await html2canvas(el, {
+        backgroundColor: '#f9fafb',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+
+      // スタイルを復元
+      scrollContainers.forEach((c, i) => {
+        c.style.maxHeight = origStyles[i].maxHeight;
+        c.style.overflow = origStyles[i].overflow;
+      });
+
+      // ダウンロード
+      const link = document.createElement('a');
+      link.download = `joubun-kun_${new Date().toISOString().slice(0, 10)}_${convId.slice(0, 6)}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch (err) {
+      console.error('スクリーンショットエラー:', err);
+    } finally {
+      setExportingConvId(null);
+    }
+  };
 
   // ===== ポップアップドラッグ処理 =====
   const handleDragStart = (e) => {
@@ -2303,16 +2345,31 @@ ${instructionText}
 
               <div className="space-y-8">
                 {conversations.map((conv, index) => (
-                  <div 
-                    key={conv.id} 
+                  <div
+                    key={conv.id}
                     className="space-y-4"
+                    data-conv-export-id={conv.id}
                     ref={index === conversations.length - 1 ? latestConversationRef : null}
                   >
                     {/* ユーザーの質問 */}
                     <div className="flex justify-end">
                       <div className="max-w-full sm:max-w-2xl">
-                        {/* ユーザーアイコンを吹き出しの上に配置（右寄せ） */}
+                        {/* ユーザーアイコンとエクスポートボタン */}
                         <div className="flex items-center gap-2 mb-1 justify-end">
+                          {!conv.isStreaming && conv.answer !== undefined && (
+                            <button
+                              onClick={() => handleExportScreenshot(conv.id)}
+                              disabled={exportingConvId === conv.id}
+                              className="text-gray-400 hover:text-blue-600 transition-colors cursor-pointer text-xs flex items-center gap-1"
+                              title="スクリーンショットを保存"
+                            >
+                              {exportingConvId === conv.id ? (
+                                <span className="animate-spin">⏳</span>
+                              ) : (
+                                <>📷 共有</>
+                              )}
+                            </button>
+                          )}
                           <span className="text-xs text-gray-500">あなた</span>
                           <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gray-200 rounded-full flex items-center justify-center text-gray-600 text-[10px] sm:text-xs">
                             👤
@@ -2763,48 +2820,45 @@ ${instructionText}
 function AppendixTableContent({ text }) {
   if (!text) return null;
 
-  // テキストを構造化された行に分割
-  const lines = [];
-  // 「一　」「二　」等の大項目、「（一）」等の中項目、「イ　」「ロ　」等の小項目で分割
-  // 「（注）」も独立行にする
-  const splitPattern = /(?=(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　)|(?=（[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?）)|(?=\s[イロハニホヘトチリヌルヲワカヨタレソツネナラム]　)|(?=（注）)|(?=（[０-９0-9]+）)/;
-
-  // より確実な分割: 正規表現で各項目を検出
-  const itemRegex = /(?:(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　|（([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)）|(?:^|\s)([イロハニホヘトチリヌルヲワカヨタレソツネナラム])　|（注）|（([０-９0-9]+)）)/g;
-
-  let lastIndex = 0;
-  let match;
   const segments = [];
 
-  // まず先頭のヘッダー部分（「課税範囲...」等）を取得
+  // 全パターンの統合正規表現（大項目、中項目、小項目、全角数字、注）
+  const itemScanRegex = /(?:(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　)|(（([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)）\s*)|((?:^|\s)([イロハニホヘトチリヌルヲワカヨタレソツネナラム])　)|(（注）)|(（([０-９0-9]+)）\s*)|(\s([１-９][０-９]?)\s)/g;
+
+  // まず先頭のヘッダー部分を取得
   const firstItemMatch = text.match(/(?:^|\s)([一二三四五六七八九十]+)　/);
-  if (firstItemMatch && firstItemMatch.index > 0) {
-    const header = text.substring(0, firstItemMatch.index).trim();
-    if (header) {
-      segments.push({ type: 'header', text: header, level: 0 });
+  const headerEnd = firstItemMatch ? firstItemMatch.index : 0;
+
+  if (headerEnd > 0) {
+    const headerText = text.substring(0, headerEnd).trim();
+    // ヘッダー内を全角数字「１」「２」「３」等で分割して構造化
+    const headerParts = headerText.split(/(?=\s[１-９][０-９]?\s)/);
+    for (const part of headerParts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const numMatch = trimmed.match(/^([１-９][０-９]?)\s+(.*)$/s);
+      if (numMatch) {
+        segments.push({ type: 'header-num', num: numMatch[1], text: numMatch[2], level: 0 });
+      } else {
+        segments.push({ type: 'header', text: trimmed, level: 0 });
+      }
     }
-    lastIndex = firstItemMatch.index;
   }
 
   // 各項目を検出して分割
   const allItems = [];
-  const itemScanRegex = /(?:(?:^|\s)([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)　)|(（([一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?)）\s*)|((?:^|\s)([イロハニホヘトチリヌルヲワカヨタレソツネナラム])　)|(（注）)|(（([０-９0-9]+)）\s*)/g;
-
   let scanMatch;
   while ((scanMatch = itemScanRegex.exec(text)) !== null) {
+    // ヘッダー範囲内のマッチはスキップ
+    if (scanMatch.index < headerEnd) continue;
     allItems.push({
       index: scanMatch.index,
-      fullMatch: scanMatch[0],
-      // 大項目（一、二、三...）
       majorNum: scanMatch[1],
-      // 中項目（（一）、（二）...）
       middleNum: scanMatch[3],
-      // 小項目（イ、ロ、ハ...）
       minorChar: scanMatch[5],
-      // 注
       isNote: !!scanMatch[6],
-      // 数字項目（（１）、（２）...）
       digitNum: scanMatch[8],
+      headerDigit: scanMatch[10],
     });
   }
 
@@ -2833,14 +2887,15 @@ function AppendixTableContent({ text }) {
   }
 
   const levelStyles = {
-    0: 'ml-0',       // 大項目
-    1: 'ml-4',       // 中項目（（一）等）
-    2: 'ml-8',       // 小項目（イ等）
-    3: 'ml-12',      // 数字項目（（１）等）
+    0: 'ml-0',
+    1: 'ml-4',
+    2: 'ml-8',
+    3: 'ml-12',
   };
 
   const labelStyles = {
     major: 'font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded',
+    'header-num': 'font-bold text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded',
     middle: 'font-bold text-blue-600 bg-blue-50 px-1 py-0.5 rounded text-xs',
     minor: 'font-bold text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded text-xs',
     digit: 'font-bold text-purple-600 bg-purple-50 px-1 py-0.5 rounded text-xs',
@@ -2848,26 +2903,46 @@ function AppendixTableContent({ text }) {
     header: '',
   };
 
+  // テキストからラベル部分を除去する関数
+  function stripLabel(seg) {
+    return seg.text
+      .replace(/^[\s]*[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?[\s　]+/, '')
+      .replace(/^（[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?）[\s]*/, '')
+      .replace(/^[\s]*[イロハニホヘトチリヌルヲワカヨタレソツネナラム][\s　]+/, '')
+      .replace(/^（注）[\s]*/, '')
+      .replace(/^（[０-９0-9]+）[\s]*/, '');
+  }
+
+  // 全角スペースで区切られたテーブルセルを整形表示
+  function renderCellText(cellText) {
+    // 全角スペース3つ以上連続を区切りとみなしてセル分割表示
+    const cells = cellText.split(/\u3000{2,}/);
+    if (cells.length > 1) {
+      return cells.map((cell, j) => (
+        <span key={j}>
+          {j > 0 && <span className="text-gray-300 mx-1">│</span>}
+          {cell.trim()}
+        </span>
+      ));
+    }
+    return cellText;
+  }
+
   return (
     <div className="space-y-1.5 text-sm">
       {segments.map((seg, i) => (
         <div key={i} className={`${levelStyles[seg.level] || 'ml-0'} leading-relaxed`}>
           {seg.type === 'header' ? (
-            <div className="text-gray-600 text-xs mb-2 pb-1 border-b border-gray-200">{seg.text}</div>
+            <div className="text-gray-600 text-xs mb-2 pb-1 border-b border-gray-200 whitespace-pre-line">{seg.text}</div>
           ) : (
             <div className="flex gap-1.5">
-              {seg.num && (
+              {(seg.num) && (
                 <span className={`${labelStyles[seg.type]} flex-shrink-0 h-fit`}>
                   {seg.type === 'middle' ? `（${seg.num}）` : seg.type === 'digit' ? `（${seg.num}）` : seg.num}
                 </span>
               )}
               <span className="flex-1">
-                {/* numラベル部分を除いたテキストを表示 */}
-                {seg.text.replace(/^[\s]*[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?[\s　]+/, '')
-                  .replace(/^（[一二三四五六七八九十]+(?:の[一二三四五六七八九十]+)?）[\s]*/, '')
-                  .replace(/^[\s]*[イロハニホヘトチリヌルヲワカヨタレソツネナラム][\s　]+/, '')
-                  .replace(/^（注）[\s]*/, '')
-                  .replace(/^（[０-９0-9]+）[\s]*/, '')}
+                {renderCellText(stripLabel(seg))}
               </span>
             </div>
           )}

@@ -130,7 +130,7 @@ export default {
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
+      'Access-Control-Allow-Headers': 'Content-Type, x-api-key, Authorization',
     };
 
     if (request.method === 'OPTIONS') {
@@ -138,6 +138,359 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // ===== バイパスキー判定 =====
+    function isBypassKey(req) {
+      const apiKey = req.headers.get('x-api-key');
+      if (!apiKey || !env.BYPASS_KEYS) return false;
+      const validKeys = env.BYPASS_KEYS.split(',').map(k => k.trim());
+      return validKeys.includes(apiKey);
+    }
+
+    // ===== 認証ヘルパー =====
+    const FREE_LIMIT = 5; // 1アカウント合計5回無料（リセットなし）
+
+    // セッショントークンからユーザーを取得
+    async function getAuthUser(req) {
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+      const token = authHeader.slice(7);
+      const userId = await env.SESSIONS.get(token);
+      if (!userId) return null;
+      const userData = await env.USERS.get(userId);
+      if (!userData) return null;
+      return { userId, token, ...JSON.parse(userData) };
+    }
+
+    // ランダムトークン生成
+    function generateToken() {
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // ===== 認証エンドポイント =====
+
+    // POST /api/auth/google - Google IDトークン検証 → セッション発行
+    if (url.pathname === '/api/auth/google' && request.method === 'POST') {
+      try {
+        const { idToken } = await request.json();
+        if (!idToken) {
+          return new Response(JSON.stringify({ error: 'idToken is required' }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Google tokeninfo APIで検証
+        const tokenInfoResp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+        if (!tokenInfoResp.ok) {
+          return new Response(JSON.stringify({ error: 'Invalid ID token' }), {
+            status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        const tokenInfo = await tokenInfoResp.json();
+
+        // クライアントID検証
+        if (tokenInfo.aud !== env.GOOGLE_CLIENT_ID) {
+          return new Response(JSON.stringify({ error: 'Invalid client ID' }), {
+            status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const googleUserId = `google:${tokenInfo.sub}`;
+
+        // 既存ユーザー取得 or 新規作成
+        let userData;
+        const existing = await env.USERS.get(googleUserId);
+        if (existing) {
+          userData = JSON.parse(existing);
+          // プロフィール更新
+          userData.name = tokenInfo.name || userData.name;
+          userData.email = tokenInfo.email || userData.email;
+          userData.picture = tokenInfo.picture || userData.picture;
+        } else {
+          userData = {
+            name: tokenInfo.name || '',
+            email: tokenInfo.email || '',
+            picture: tokenInfo.picture || '',
+            createdAt: new Date().toISOString(),
+            usageCount: 0,
+            stripeCustomerId: null,
+            stripeSubscriptionId: null,
+          };
+        }
+
+        await env.USERS.put(googleUserId, JSON.stringify(userData));
+
+        // セッショントークン発行
+        const sessionToken = generateToken();
+        await env.SESSIONS.put(sessionToken, googleUserId, { expirationTtl: 30 * 24 * 60 * 60 }); // 30日
+
+        return new Response(JSON.stringify({
+          token: sessionToken,
+          user: {
+            name: userData.name,
+            email: userData.email,
+            picture: userData.picture,
+            usageCount: userData.usageCount,
+            freeLimit: FREE_LIMIT,
+            hasStripe: !!userData.stripeCustomerId,
+          }
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // GET /api/auth/me - ユーザー情報取得
+    if (url.pathname === '/api/auth/me' && request.method === 'GET') {
+      const user = await getAuthUser(request);
+      if (!user) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({
+        user: {
+          name: user.name,
+          email: user.email,
+          picture: user.picture,
+          usageCount: user.usageCount,
+          freeLimit: FREE_LIMIT,
+          hasStripe: !!user.stripeCustomerId,
+        }
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/auth/logout - セッション削除
+    if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
+      const authHeader = request.headers.get('Authorization');
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.slice(7);
+        await env.SESSIONS.delete(token);
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/check-usage - 検索可否チェック
+    if (url.pathname === '/api/check-usage' && request.method === 'GET') {
+      const user = await getAuthUser(request);
+      if (!user) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+      const usageCount = user.usageCount || 0;
+      const canSearch = usageCount < FREE_LIMIT || !!user.stripeCustomerId;
+      const needsPayment = usageCount >= FREE_LIMIT && !user.stripeCustomerId;
+      return new Response(JSON.stringify({
+        canSearch,
+        needsPayment,
+        usageCount,
+        freeLimit: FREE_LIMIT,
+        hasStripe: !!user.stripeCustomerId,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/record-usage - 使用量記録 + Stripe Meter Event
+    if (url.pathname === '/api/record-usage' && request.method === 'POST') {
+      const user = await getAuthUser(request);
+      if (!user) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      // 使用量インクリメント
+      const usageCount = (user.usageCount || 0) + 1;
+
+      // ユーザーデータ更新
+      const updatedUser = {
+        name: user.name, email: user.email, picture: user.picture,
+        createdAt: user.createdAt,
+        usageCount: usageCount, stripeCustomerId: user.stripeCustomerId,
+        stripeSubscriptionId: user.stripeSubscriptionId,
+      };
+      await env.USERS.put(user.userId, JSON.stringify(updatedUser));
+
+      // 無料枠超過 & Stripe登録済みの場合、Meter Event送信
+      if (usageCount > FREE_LIMIT && user.stripeCustomerId && env.STRIPE_SECRET_KEY) {
+        try {
+          const meterResp = await fetch('https://api.stripe.com/v1/billing/meter_events', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              'event_name': 'search_query',
+              'payload[stripe_customer_id]': user.stripeCustomerId,
+              'payload[value]': '1',
+            }).toString(),
+          });
+          if (!meterResp.ok) {
+            console.error('Stripe meter event error:', await meterResp.text());
+          }
+        } catch (e) {
+          console.error('Stripe meter event failed:', e);
+        }
+      }
+
+      return new Response(JSON.stringify({
+        usageCount,
+        freeLimit: FREE_LIMIT,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/billing/setup - Stripe Checkout Session作成（支払い方法登録）
+    if (url.pathname === '/api/billing/setup' && request.method === 'POST') {
+      const user = await getAuthUser(request);
+      if (!user) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+      if (!env.STRIPE_SECRET_KEY) {
+        return new Response(JSON.stringify({ error: 'Stripe not configured' }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        // Stripeカスタマー作成（まだない場合）
+        let customerId = user.stripeCustomerId;
+        if (!customerId) {
+          const customerResp = await fetch('https://api.stripe.com/v1/customers', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              'email': user.email,
+              'name': user.name,
+              'metadata[userId]': user.userId,
+            }).toString(),
+          });
+          const customerData = await customerResp.json();
+          customerId = customerData.id;
+        }
+
+        // Checkout Session作成（従量課金のサブスクリプション）
+        const { returnUrl } = await request.json().catch(() => ({}));
+        const successUrl = returnUrl || 'https://joubun-kun.pages.dev/?billing=success';
+        const cancelUrl = returnUrl || 'https://joubun-kun.pages.dev/?billing=cancel';
+
+        const sessionResp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            'customer': customerId,
+            'mode': 'subscription',
+            'line_items[0][price]': env.STRIPE_METER_PRICE_ID || '',
+            'success_url': successUrl,
+            'cancel_url': cancelUrl,
+          }).toString(),
+        });
+        const sessionData = await sessionResp.json();
+
+        if (sessionData.error) {
+          return new Response(JSON.stringify({ error: sessionData.error.message }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        return new Response(JSON.stringify({ url: sessionData.url }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // POST /api/billing/webhook - Stripe Webhook
+    if (url.pathname === '/api/billing/webhook' && request.method === 'POST') {
+      try {
+        const body = await request.text();
+        const sig = request.headers.get('stripe-signature');
+
+        // Webhook署名検証（簡易版: タイムスタンプ + ペイロード）
+        if (env.STRIPE_WEBHOOK_SECRET && sig) {
+          const parts = sig.split(',').reduce((acc, part) => {
+            const [key, value] = part.split('=');
+            acc[key] = value;
+            return acc;
+          }, {});
+          const timestamp = parts['t'];
+          const signedPayload = `${timestamp}.${body}`;
+          const key = await crypto.subtle.importKey(
+            'raw',
+            new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET),
+            { name: 'HMAC', hash: 'SHA-256' },
+            false,
+            ['sign']
+          );
+          const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload));
+          const expectedSig = Array.from(new Uint8Array(signature), b => b.toString(16).padStart(2, '0')).join('');
+          if (expectedSig !== parts['v1']) {
+            return new Response(JSON.stringify({ error: 'Invalid signature' }), {
+              status: 400, headers: { 'Content-Type': 'application/json' }
+            });
+          }
+        }
+
+        const event = JSON.parse(body);
+
+        // checkout.session.completed → カスタマーID保存
+        if (event.type === 'checkout.session.completed') {
+          const session = event.data.object;
+          const customerId = session.customer;
+          const subscriptionId = session.subscription;
+
+          // カスタマーのmetadataからuserIdを取得
+          const customerResp = await fetch(`https://api.stripe.com/v1/customers/${customerId}`, {
+            headers: { 'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}` },
+          });
+          const customerData = await customerResp.json();
+          const userId = customerData.metadata?.userId;
+
+          if (userId) {
+            const existing = await env.USERS.get(userId);
+            if (existing) {
+              const userData = JSON.parse(existing);
+              userData.stripeCustomerId = customerId;
+              userData.stripeSubscriptionId = subscriptionId;
+              await env.USERS.put(userId, JSON.stringify(userData));
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({ received: true }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
 
     if (url.pathname === '/search') {
       try {

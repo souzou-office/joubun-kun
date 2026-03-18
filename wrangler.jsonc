@@ -27,5 +27,15 @@
   ],
   "ai": {
     "binding": "AI"
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "c59199266feb4beaa2d3aa57326d4203"
+    },
+    {
+      "binding": "USERS",
+      "id": "7ba325a14c434b5297619b3eddb2665f"
+    }
+  ]
 }

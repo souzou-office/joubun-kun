@@ -793,6 +793,29 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
+  // ===== バイパスキー（URLの?key=XXXで設定、開発・クライアント用） =====
+  const [bypassKey] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const keyFromUrl = params.get('key');
+    if (keyFromUrl) {
+      localStorage.setItem('joubun_bypass_key', keyFromUrl);
+      // URLからkeyパラメータを消す（履歴に残さない）
+      const clean = new URL(window.location);
+      clean.searchParams.delete('key');
+      window.history.replaceState({}, '', clean.toString());
+      return keyFromUrl;
+    }
+    return localStorage.getItem('joubun_bypass_key');
+  });
+
+  // ===== 認証・課金 state =====
+  const [authUser, setAuthUser] = useState(null); // { name, email, picture, usageCount, freeLimit, hasStripe }
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('joubun_auth_token'));
+  const [showBillingModal, setShowBillingModal] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+
   // 最新の会話へのスクロール用ref
   const latestConversationRef = useRef(null);
   const [exportingConvId, setExportingConvId] = useState(null);
@@ -856,6 +879,151 @@ export default function App() {
 
   const handleDragEnd = () => {
     setIsDragging(false);
+  };
+
+  // ===== 認証ヘルパー =====
+  const authHeaders = () => {
+    const h = {};
+    if (authToken) h['Authorization'] = `Bearer ${authToken}`;
+    if (bypassKey) h['x-api-key'] = bypassKey;
+    return h;
+  };
+
+  // ログイン後のユーザー情報取得
+  const fetchMe = async (token) => {
+    try {
+      const resp = await fetch(`${WORKER_URL}/api/auth/me`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!resp.ok) {
+        // トークン無効 → ログアウト
+        localStorage.removeItem('joubun_auth_token');
+        setAuthToken(null);
+        setAuthUser(null);
+        return;
+      }
+      const data = await resp.json();
+      setAuthUser(data.user);
+    } catch (e) {
+      console.error('Auth check failed:', e);
+    }
+  };
+
+  // 起動時にトークンがあればユーザー情報取得
+  useEffect(() => {
+    if (authToken) {
+      fetchMe(authToken);
+    }
+  }, []);
+
+  // Googleログインコールバック
+  const handleGoogleLogin = async (credentialResponse) => {
+    try {
+      const resp = await fetch(`${WORKER_URL}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: credentialResponse.credential }),
+      });
+      if (!resp.ok) throw new Error('Login failed');
+      const data = await resp.json();
+      localStorage.setItem('joubun_auth_token', data.token);
+      setAuthToken(data.token);
+      setAuthUser(data.user);
+    } catch (e) {
+      console.error('Google login error:', e);
+      setError('ログインに失敗しました');
+    }
+  };
+
+  // Google Sign-In初期化
+  useEffect(() => {
+    if (typeof google !== 'undefined' && google.accounts) {
+      google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
+        callback: handleGoogleLogin,
+      });
+    }
+  }, []);
+
+  // Googleログインボタン表示
+  const renderGoogleButton = (elementId) => {
+    if (typeof google !== 'undefined' && google.accounts) {
+      const el = document.getElementById(elementId);
+      if (el) {
+        google.accounts.id.renderButton(el, {
+          theme: 'outline',
+          size: 'medium',
+          text: 'signin_with',
+          locale: 'ja',
+        });
+      }
+    }
+  };
+
+  // ログアウト
+  const handleLogout = async () => {
+    try {
+      await fetch(`${WORKER_URL}/api/auth/logout`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+    } catch (e) { /* ignore */ }
+    localStorage.removeItem('joubun_auth_token');
+    setAuthToken(null);
+    setAuthUser(null);
+    setShowUserMenu(false);
+  };
+
+  // 使用量チェック（検索前）
+  const checkUsage = async () => {
+    if (!authToken) return { canSearch: false, needsLogin: true };
+    try {
+      const resp = await fetch(`${WORKER_URL}/api/check-usage`, {
+        headers: authHeaders(),
+      });
+      if (!resp.ok) return { canSearch: false, needsLogin: true };
+      return await resp.json();
+    } catch (e) {
+      console.error('Usage check failed:', e);
+      return { canSearch: false, error: true };
+    }
+  };
+
+  // 使用量記録（検索後）
+  const recordUsage = async () => {
+    if (!authToken) return;
+    try {
+      const resp = await fetch(`${WORKER_URL}/api/record-usage`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setAuthUser(prev => prev ? { ...prev, usageCount: data.usageCount } : prev);
+      }
+    } catch (e) {
+      console.error('Record usage failed:', e);
+    }
+  };
+
+  // Stripe Checkout開始
+  const startBillingSetup = async () => {
+    try {
+      const resp = await fetch(`${WORKER_URL}/api/billing/setup`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnUrl: window.location.origin + '/?billing=success' }),
+      });
+      const data = await resp.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setError('課金設定の開始に失敗しました');
+      }
+    } catch (e) {
+      console.error('Billing setup error:', e);
+      setError('課金設定の開始に失敗しました');
+    }
   };
 
   // ===== 参照条文クリック処理 =====
@@ -1519,6 +1687,26 @@ export default function App() {
     const actualQuery = (typeof searchQuery === 'string') ? searchQuery : query;
 
     if (!actualQuery.trim() || modelLoading) return;
+
+    // ===== 認証・使用量チェック（バイパスキーがあればスキップ） =====
+    if (!bypassKey) {
+      if (!authToken || !authUser) {
+        setError('検索するにはログインが必要です');
+        return;
+      }
+      const usageCheck = await checkUsage();
+      if (usageCheck.needsLogin) {
+        setError('セッションが切れました。再ログインしてください');
+        setAuthToken(null);
+        setAuthUser(null);
+        localStorage.removeItem('joubun_auth_token');
+        return;
+      }
+      if (usageCheck.needsPayment) {
+        setShowBillingModal(true);
+        return;
+      }
+    }
 
     // 検索履歴を保存
     saveSearchHistory(actualQuery.trim());
@@ -2217,7 +2405,12 @@ ${instructionText}
       setQuery('');
       setProcessingStep('');
       setProgress(0);
-      
+
+      // 使用量を記録（バイパスキー時はスキップ）
+      if (!bypassKey) {
+        await recordUsage();
+      }
+
     } catch (err) {
       console.error('検索エラー:', err);
       setError(`検索に失敗しました: ${err.message}`);
@@ -2255,6 +2448,14 @@ ${instructionText}
   }
 
   // ===== メインUI =====
+  // ユーザーメニュー外クリックで閉じる
+  useEffect(() => {
+    if (!showUserMenu) return;
+    const handler = () => setShowUserMenu(false);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [showUserMenu]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="w-full px-1 sm:px-4 lg:px-8">
@@ -2266,7 +2467,72 @@ ${instructionText}
                 <img src={logoA} alt="条文くん" className="h-14" />
               </div>
               
-              <div className="flex gap-3">
+              <div className="flex gap-2 items-center">
+                {/* 寄附ボタン */}
+                {import.meta.env.VITE_STRIPE_DONATION_LINK && (
+                  <a
+                    href={import.meta.env.VITE_STRIPE_DONATION_LINK}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+                  >
+                    寄附で応援
+                  </a>
+                )}
+
+                {/* 認証エリア */}
+                {authUser ? (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowUserMenu(!showUserMenu)}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+                    >
+                      {authUser.picture ? (
+                        <img src={authUser.picture} alt="" className="w-7 h-7 rounded-full" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs">{authUser.name?.charAt(0)}</div>
+                      )}
+                      <span className="text-xs text-gray-600 hidden sm:inline">
+                        {authUser.usageCount}/{authUser.freeLimit}回
+                        {authUser.hasStripe && ' + 従量制'}
+                      </span>
+                    </button>
+                    {showUserMenu && (
+                      <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-2 w-56 z-50">
+                        <div className="px-4 py-2 border-b border-gray-100">
+                          <p className="font-medium text-sm">{authUser.name}</p>
+                          <p className="text-xs text-gray-500">{authUser.email}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            検索: {authUser.usageCount}/{authUser.freeLimit}回（無料枠）
+                          </p>
+                        </div>
+                        {!authUser.hasStripe && authUser.usageCount >= authUser.freeLimit && (
+                          <button
+                            onClick={() => { setShowUserMenu(false); setShowBillingModal(true); }}
+                            className="w-full text-left px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 cursor-pointer"
+                          >
+                            従量課金を設定
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setShowSettings(true)}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        >
+                          設定
+                        </button>
+                        <button
+                          onClick={handleLogout}
+                          className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                        >
+                          ログアウト
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div id="google-signin-btn" ref={(el) => { if (el) setTimeout(() => renderGoogleButton('google-signin-btn'), 100); }}></div>
+                )}
+
                 <button
                   onClick={() => setShowSettings(true)}
                   className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
@@ -2338,6 +2604,13 @@ ${instructionText}
                     )}
                   </div>
 
+                  {/* 未ログイン時のログイン案内（バイパスキー時は非表示） */}
+                  {!authUser && !bypassKey && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4 text-center">
+                      <p className="text-sm text-blue-800 mb-3">検索するにはGoogleアカウントでログインしてください（5回まで無料）</p>
+                      <div id="google-signin-landing" ref={(el) => { if (el) setTimeout(() => renderGoogleButton('google-signin-landing'), 100); }} className="flex justify-center"></div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2707,6 +2980,39 @@ ${instructionText}
         </div>
       </div>
 
+      {/* 課金モーダル */}
+      {showBillingModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowBillingModal(false)}>
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-bold mb-3">無料枠を使い切りました</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              無料検索（{authUser?.freeLimit}回）を使い切りました。<br />
+              従量課金（1回5円）を設定すると、引き続き検索できます。<br />
+              原価のみで利益は載せていません。
+            </p>
+            <div className="bg-gray-50 rounded-lg p-4 mb-4">
+              <p className="text-sm font-medium">料金</p>
+              <p className="text-2xl font-bold text-blue-600">5円<span className="text-sm font-normal text-gray-500">/回</span></p>
+              <p className="text-xs text-gray-500 mt-1">月末にStripeが自動請求します</p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowBillingModal(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
+              >
+                閉じる
+              </button>
+              <button
+                onClick={() => { setShowBillingModal(false); startBillingSetup(); }}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 cursor-pointer"
+              >
+                支払い方法を登録
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 設定モーダル */}
       {showSettings && <SettingsModal
         onClose={() => {
@@ -2805,6 +3111,80 @@ ${instructionText}
               {articlePopup.data && !articlePopup.data.article && (
                 <div className="text-gray-500 italic">条文が見つかりませんでした</div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* フッター */}
+      <div className="text-center text-xs text-gray-400 py-3 space-x-3">
+        <span>AIによる検索結果は参考情報です。必ず条文原文をご確認ください。</span>
+        <button onClick={() => setShowTerms(true)} className="underline hover:text-gray-600 cursor-pointer">利用規約</button>
+        <button onClick={() => setShowPrivacy(true)} className="underline hover:text-gray-600 cursor-pointer">プライバシーポリシー</button>
+      </div>
+
+      {/* 利用規約モーダル */}
+      {showTerms && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTerms(false)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-bold">利用規約</h2>
+              <button onClick={() => setShowTerms(false)} className="text-gray-400 hover:text-gray-600 text-xl cursor-pointer">✕</button>
+            </div>
+            <div className="text-sm text-gray-700 space-y-3">
+              <p className="font-medium">条文くん 利用規約</p>
+              <p>本サービスは、AIを活用した法令検索の補助ツールです。以下の条件にご同意の上ご利用ください。</p>
+              <h3 className="font-medium mt-4">1. サービスの性質</h3>
+              <p>本サービスはAIによる法令検索・解説を提供しますが、法律相談や法的助言ではありません。AIによる解説は参考情報であり、正確性・完全性を保証するものではありません。必ず条文原文をご確認ください。</p>
+              <h3 className="font-medium mt-4">2. 料金</h3>
+              <p>1アカウントにつき5回まで無料でご利用いただけます。超過分は1回5円（税込）の従量課金となります。料金はAPI利用の原価であり、利益は含まれていません。</p>
+              <h3 className="font-medium mt-4">3. 禁止事項</h3>
+              <p>以下の行為を禁止します。</p>
+              <ul className="list-disc ml-5 space-y-1">
+                <li>自動化ツール等による大量アクセス</li>
+                <li>サービスの運営を妨げる行為</li>
+                <li>不正なアカウント作成</li>
+              </ul>
+              <h3 className="font-medium mt-4">4. サービスの変更・終了</h3>
+              <p>本サービスは予告なく内容を変更、または終了する場合があります。</p>
+              <h3 className="font-medium mt-4">5. 免責</h3>
+              <p>本サービスの利用により生じた損害について、運営者は一切の責任を負いません。</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* プライバシーポリシーモーダル */}
+      {showPrivacy && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowPrivacy(false)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-bold">プライバシーポリシー</h2>
+              <button onClick={() => setShowPrivacy(false)} className="text-gray-400 hover:text-gray-600 text-xl cursor-pointer">✕</button>
+            </div>
+            <div className="text-sm text-gray-700 space-y-3">
+              <p className="font-medium">条文くん プライバシーポリシー</p>
+              <h3 className="font-medium mt-4">1. 取得する情報</h3>
+              <p>本サービスでは、Googleアカウントでのログイン時に以下の情報を取得します。</p>
+              <ul className="list-disc ml-5 space-y-1">
+                <li>氏名</li>
+                <li>メールアドレス</li>
+                <li>プロフィール画像</li>
+              </ul>
+              <h3 className="font-medium mt-4">2. 利用目的</h3>
+              <ul className="list-disc ml-5 space-y-1">
+                <li>ユーザーの識別とセッション管理</li>
+                <li>利用回数の記録</li>
+                <li>課金処理（Stripeを利用）</li>
+              </ul>
+              <h3 className="font-medium mt-4">3. 第三者提供</h3>
+              <p>取得した個人情報は、課金処理に必要な範囲でStripe, Inc.に提供するほか、第三者に提供することはありません。</p>
+              <h3 className="font-medium mt-4">4. データの保管</h3>
+              <p>ユーザー情報はCloudflare KVに保管されます。検索内容はサーバーに保存されません。</p>
+              <h3 className="font-medium mt-4">5. データの削除</h3>
+              <p>アカウントの削除をご希望の場合は、運営者までご連絡ください。</p>
+              <h3 className="font-medium mt-4">6. お問い合わせ</h3>
+              <p>本ポリシーに関するお問い合わせは、サービス運営者までお願いいたします。</p>
             </div>
           </div>
         </div>

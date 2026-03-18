@@ -914,68 +914,54 @@ export default function App() {
     if (authToken) {
       fetchMe(authToken);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Googleログインコールバック（useRefで最新の関数を保持）
-  const handleGoogleLoginRef = useRef(null);
-  handleGoogleLoginRef.current = async (credentialResponse) => {
-    try {
-      const resp = await fetch(`${WORKER_URL}/api/auth/google`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken: credentialResponse.credential }),
-      });
-      if (!resp.ok) throw new Error('Login failed');
-      const data = await resp.json();
-      localStorage.setItem('joubun_auth_token', data.token);
-      setAuthToken(data.token);
-      setAuthUser(data.user);
-    } catch (e) {
-      console.error('Google login error:', e);
-      setError('ログインに失敗しました');
-    }
-  };
-
-  // Google Sign-In初期化（1回だけ）
-  const googleInitialized = useRef(false);
+  // Google Sign-In初期化 & ボタン描画
+  const googleInitRef = useRef(false);
   useEffect(() => {
-    function tryInit() {
-      if (googleInitialized.current) return;
-      if (typeof window.google === 'undefined' || !window.google.accounts) return;
-      window.google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
-        callback: (resp) => handleGoogleLoginRef.current(resp),
-      });
-      googleInitialized.current = true;
+    let interval;
+    function doInit() {
+      try {
+        if (googleInitRef.current) { clearInterval(interval); return; }
+        if (typeof window.google === 'undefined' || !window.google.accounts) return;
+        window.google.accounts.id.initialize({
+          client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
+          callback: async (credentialResponse) => {
+            try {
+              const resp = await fetch(`${WORKER_URL}/api/auth/google`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ idToken: credentialResponse.credential }),
+              });
+              if (!resp.ok) throw new Error('Login failed');
+              const data = await resp.json();
+              localStorage.setItem('joubun_auth_token', data.token);
+              setAuthToken(data.token);
+              setAuthUser(data.user);
+            } catch (e) {
+              console.error('Google login error:', e);
+            }
+          },
+        });
+        googleInitRef.current = true;
+        clearInterval(interval);
+        // ボタン描画
+        ['google-signin-btn', 'google-signin-landing'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) {
+            window.google.accounts.id.renderButton(el, {
+              theme: 'outline', size: 'medium', text: 'signin_with', locale: 'ja',
+            });
+          }
+        });
+      } catch (e) {
+        console.error('Google init error:', e);
+      }
     }
-    tryInit();
-    // SDKがまだ読み込まれてない場合に備えてリトライ
-    const timer = setInterval(() => {
-      tryInit();
-      if (googleInitialized.current) clearInterval(timer);
-    }, 500);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Googleログインボタン描画（authUser変化時 = ログアウト後に再描画）
-  useEffect(() => {
-    if (authUser || !googleInitialized.current) return;
-    // ログインしていない時だけボタンを描画
-    setTimeout(() => {
-      ['google-signin-btn', 'google-signin-landing'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el && window.google && window.google.accounts) {
-          el.innerHTML = ''; // 前のボタンをクリア
-          window.google.accounts.id.renderButton(el, {
-            theme: 'outline',
-            size: 'medium',
-            text: 'signin_with',
-            locale: 'ja',
-          });
-        }
-      });
-    }, 100);
-  }, [authUser]);
+    interval = setInterval(doInit, 500);
+    doInit();
+    return () => clearInterval(interval);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ログアウト
   const handleLogout = async () => {
@@ -989,6 +975,7 @@ export default function App() {
     setAuthToken(null);
     setAuthUser(null);
     setShowUserMenu(false);
+    window.location.reload();
   };
 
   // 使用量チェック（検索前）
@@ -2437,6 +2424,14 @@ ${instructionText}
       setProgress(0);
     }
   };
+  // ユーザーメニュー外クリックで閉じる
+  useEffect(() => {
+    if (!showUserMenu) return;
+    const handler = () => setShowUserMenu(false);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [showUserMenu]);
+
   // ===== 初期化画面 =====
   if (modelLoading) {
     return (
@@ -2465,14 +2460,6 @@ ${instructionText}
   }
 
   // ===== メインUI =====
-  // ユーザーメニュー外クリックで閉じる
-  useEffect(() => {
-    if (!showUserMenu) return;
-    const handler = () => setShowUserMenu(false);
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, [showUserMenu]);
-
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="w-full px-1 sm:px-4 lg:px-8">

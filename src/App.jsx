@@ -916,8 +916,9 @@ export default function App() {
     }
   }, []);
 
-  // Googleログインコールバック
-  const handleGoogleLogin = async (credentialResponse) => {
+  // Googleログインコールバック（useRefで最新の関数を保持）
+  const handleGoogleLoginRef = useRef(null);
+  handleGoogleLoginRef.current = async (credentialResponse) => {
     try {
       const resp = await fetch(`${WORKER_URL}/api/auth/google`, {
         method: 'POST',
@@ -935,21 +936,37 @@ export default function App() {
     }
   };
 
-  // Google Sign-In初期化 & ボタン描画
+  // Google Sign-In初期化（1回だけ）
   const googleInitialized = useRef(false);
   useEffect(() => {
-    const initGoogle = () => {
-      if (typeof google === 'undefined' || !google.accounts || googleInitialized.current) return;
-      google.accounts.id.initialize({
+    function tryInit() {
+      if (googleInitialized.current) return;
+      if (typeof window.google === 'undefined' || !window.google.accounts) return;
+      window.google.accounts.id.initialize({
         client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
-        callback: handleGoogleLogin,
+        callback: (resp) => handleGoogleLoginRef.current(resp),
       });
       googleInitialized.current = true;
-      // ボタン描画
+    }
+    tryInit();
+    // SDKがまだ読み込まれてない場合に備えてリトライ
+    const timer = setInterval(() => {
+      tryInit();
+      if (googleInitialized.current) clearInterval(timer);
+    }, 500);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Googleログインボタン描画（authUser変化時 = ログアウト後に再描画）
+  useEffect(() => {
+    if (authUser || !googleInitialized.current) return;
+    // ログインしていない時だけボタンを描画
+    setTimeout(() => {
       ['google-signin-btn', 'google-signin-landing'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) {
-          google.accounts.id.renderButton(el, {
+        if (el && window.google && window.google.accounts) {
+          el.innerHTML = ''; // 前のボタンをクリア
+          window.google.accounts.id.renderButton(el, {
             theme: 'outline',
             size: 'medium',
             text: 'signin_with',
@@ -957,13 +974,8 @@ export default function App() {
           });
         }
       });
-    };
-    // SDKがまだ読み込まれていない場合は少し待つ
-    const timer = setTimeout(initGoogle, 500);
-    // SDKロード済みなら即実行
-    initGoogle();
-    return () => clearTimeout(timer);
-  }, [authUser]); // authUser変化時に再描画（ログアウト後にボタンを出すため）
+    }, 100);
+  }, [authUser]);
 
   // ログアウト
   const handleLogout = async () => {

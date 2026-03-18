@@ -2577,7 +2577,6 @@ ${instructionText}
                     <div className="text-center max-w-md">
                       <div className="mb-6">
                         <img src={logoA} alt="条文くん" className="w-48 mx-auto mb-4" />
-                        <h2 className="text-xl font-bold text-gray-800 mb-2">条文くんへようこそ</h2>
                         <p className="text-gray-600 text-sm mb-1">AIを活用した法令検索サービス</p>
                         <p className="text-gray-500 text-xs">5回まで無料でお試しいただけます</p>
                       </div>

@@ -844,6 +844,7 @@ export default function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showTokushoho, setShowTokushoho] = useState(false);
 
   // 最新の会話へのスクロール用ref
   const latestConversationRef = useRef(null);
@@ -3165,6 +3166,7 @@ ${instructionText}
         <span>AIによる検索結果は参考情報です。必ず条文原文をご確認ください。</span>
         <button onClick={() => setShowTerms(true)} className="underline hover:text-gray-600 cursor-pointer">利用規約</button>
         <button onClick={() => setShowPrivacy(true)} className="underline hover:text-gray-600 cursor-pointer">プライバシーポリシー</button>
+        <button onClick={() => setShowTokushoho(true)} className="underline hover:text-gray-600 cursor-pointer">特定商取引法に基づく表記</button>
       </div>
 
       {/* 利用規約モーダル */}
@@ -3229,6 +3231,68 @@ ${instructionText}
               <p>アカウントの削除をご希望の場合は、運営者までご連絡ください。</p>
               <h3 className="font-medium mt-4">6. お問い合わせ</h3>
               <p>本ポリシーに関するお問い合わせは、サービス運営者までお願いいたします。</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 特定商取引法に基づく表記モーダル */}
+      {showTokushoho && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTokushoho(false)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-bold">特定商取引法に基づく表記</h2>
+              <button onClick={() => setShowTokushoho(false)} className="text-gray-400 hover:text-gray-600 text-xl cursor-pointer">✕</button>
+            </div>
+            <div className="text-sm text-gray-700 space-y-4">
+              <table className="w-full border-collapse">
+                <tbody>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">事業者名</td>
+                    <td className="py-2">司法書士法人そうぞう</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">代表社員</td>
+                    <td className="py-2">池田 龍太</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">所在地</td>
+                    <td className="py-2">福岡県福岡市南区大橋1丁目4番19号</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">メールアドレス</td>
+                    <td className="py-2">info@souzouoffice.jp</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">ホームページ</td>
+                    <td className="py-2"><a href="https://www.souzouoffice.jp/" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">https://www.souzouoffice.jp/</a></td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">販売価格</td>
+                    <td className="py-2">1回5円（税込）。任意で寄附を行うことが可能ですが、寄附はサービス利用の必須条件ではなく、寄附を行わなくても全ての機能をご利用いただけます。</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">商品代金以外の必要料金</td>
+                    <td className="py-2">インターネット接続にかかる通信料等は、お客様のご負担となります。</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">支払方法</td>
+                    <td className="py-2">クレジットカード（Stripe決済）</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">支払時期</td>
+                    <td className="py-2">ご利用分は月1回、Stripeより請求されます。</td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">商品提供時期</td>
+                    <td className="py-2">決済完了後、直ちにご利用いただけます。</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap align-top">返品・キャンセル</td>
+                    <td className="py-2">サービスの性質上、決済後の返金・キャンセルには原則として応じておりません。ただし、システムの不具合等、当方の責任がある場合はこの限りではありません。</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

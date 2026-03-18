@@ -279,7 +279,12 @@ export default {
             }
           }
 
-          const finalScore = rrfScore + bonus;
+          // 附則の経過措置条文はスコアを下げる（本則と同じ条番号の附則条文が優先されるのを防ぐ）
+          const caption = metadata.caption || metadata.article_caption || '';
+          const isKeikaSochi = caption.includes('経過措置');
+          const penaltyScore = isKeikaSochi ? -1.5 : 0;
+
+          const finalScore = rrfScore + bonus + penaltyScore;
           scoreMap.set(key, { metadata, similarity: rrfScore, score: finalScore, matchType, sources: ['RRF'] });
         }
 
@@ -699,7 +704,7 @@ ${query}
             'anthropic-version': '2023-06-01'
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-5-20250929',
+            model: 'claude-sonnet-4-6',
             max_tokens: 2000,
             system: system || '',
             messages: messages
@@ -742,7 +747,7 @@ ${query}
             'anthropic-version': '2023-06-01'
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-5-20250929',
+            model: 'claude-sonnet-4-6',
             max_tokens: 3000,
             stream: true,
             system: system || '',

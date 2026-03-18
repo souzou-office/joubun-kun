@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 import logoA from '/logo_A.png';
 import logoB from '/logo_B.png';
 import { ALL_LAW_IDS } from './lawIds.js';
@@ -812,11 +812,9 @@ export default function App() {
         c.style.overflow = 'visible';
       });
 
-      const canvas = await html2canvas(el, {
+      const dataUrl = await toPng(el, {
         backgroundColor: '#f9fafb',
-        scale: 2,
-        useCORS: true,
-        logging: false,
+        pixelRatio: 2,
       });
 
       // スタイルを復元
@@ -827,8 +825,8 @@ export default function App() {
 
       // ダウンロード
       const link = document.createElement('a');
-      link.download = `joubun-kun_${new Date().toISOString().slice(0, 10)}_${convId.slice(0, 6)}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.download = `joubun-kun_${new Date().toISOString().slice(0, 10)}_${String(convId).slice(0, 6)}.png`;
+      link.href = dataUrl;
       link.click();
     } catch (err) {
       console.error('スクリーンショットエラー:', err);

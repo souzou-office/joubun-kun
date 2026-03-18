@@ -2522,12 +2522,22 @@ ${instructionText}
                       ) : (
                         <div className="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs">{authUser.name?.charAt(0)}</div>
                       )}
+                      {!authUser.hasStripe && (
+                        <span className="text-xs text-gray-600 hidden sm:inline">
+                          {authUser.usageCount}/{authUser.freeLimit}回
+                        </span>
+                      )}
                     </button>
                     {showUserMenu && (
                       <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-2 w-56 z-50">
                         <div className="px-4 py-2 border-b border-gray-100">
                           <p className="font-medium text-sm">{authUser.name}</p>
                           <p className="text-xs text-gray-500">{authUser.email}</p>
+                          {!authUser.hasStripe && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              検索: {authUser.usageCount}/{authUser.freeLimit}回（無料枠）
+                            </p>
+                          )}
                         </div>
                         {!authUser.hasStripe && authUser.usageCount >= authUser.freeLimit && (
                           <button

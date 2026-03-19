@@ -3150,15 +3150,21 @@ ${instructionText}
         </div>
       )}
 
+      {/* 寄附バナー */}
+      {import.meta.env.VITE_STRIPE_DONATION_LINK && (
+        <div className="bg-gray-50 border-t border-gray-200 py-3 text-center">
+          <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="inline-block hover:opacity-80 transition-opacity">
+            <img src="/LOGOD.png" alt="寄付で応援" className="h-12" />
+          </a>
+        </div>
+      )}
+
       {/* フッター */}
       <div className="text-center text-xs text-gray-400 py-3 space-x-3">
         <span>AIによる検索結果は参考情報です。必ず条文原文をご確認ください。</span>
         <button onClick={() => setShowTerms(true)} className="underline hover:text-gray-600 cursor-pointer">利用規約</button>
         <button onClick={() => setShowPrivacy(true)} className="underline hover:text-gray-600 cursor-pointer">プライバシーポリシー</button>
         <button onClick={() => setShowTokushoho(true)} className="underline hover:text-gray-600 cursor-pointer">特定商取引法に基づく表記</button>
-        {import.meta.env.VITE_STRIPE_DONATION_LINK && (
-          <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="inline-block hover:opacity-80 transition-opacity"><img src="/LOGOD.png" alt="寄付で応援" className="h-8 inline-block" /></a>
-        )}
       </div>
 
       {/* 利用規約モーダル */}

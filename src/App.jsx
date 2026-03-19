@@ -2499,6 +2499,12 @@ ${instructionText}
               </div>
               
               <div className="flex gap-2 items-center">
+                {/* 寄附ボタン */}
+                {import.meta.env.VITE_STRIPE_DONATION_LINK && (
+                  <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="inline-block hover:opacity-80 transition-opacity">
+                    <img src="/LOGOD.png" alt="寄付で応援" className="h-8" />
+                  </a>
+                )}
 
                 {/* 認証エリア */}
                 {authUser ? (
@@ -3147,15 +3153,6 @@ ${instructionText}
               )}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* 寄附バナー */}
-      {import.meta.env.VITE_STRIPE_DONATION_LINK && (
-        <div className="bg-gray-50 border-t border-gray-200 py-3 text-center">
-          <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="inline-block hover:opacity-80 transition-opacity">
-            <img src="/LOGOD.png" alt="寄付で応援" className="h-12" />
-          </a>
         </div>
       )}
 

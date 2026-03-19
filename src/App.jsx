@@ -3157,7 +3157,7 @@ ${instructionText}
         <button onClick={() => setShowPrivacy(true)} className="underline hover:text-gray-600 cursor-pointer">プライバシーポリシー</button>
         <button onClick={() => setShowTokushoho(true)} className="underline hover:text-gray-600 cursor-pointer">特定商取引法に基づく表記</button>
         {import.meta.env.VITE_STRIPE_DONATION_LINK && (
-          <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">寄附で応援</a>
+          <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="text-sm text-orange-500 hover:text-orange-600 font-medium">寄附で応援</a>
         )}
       </div>
 

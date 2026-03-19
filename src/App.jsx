@@ -2499,17 +2499,6 @@ ${instructionText}
               </div>
               
               <div className="flex gap-2 items-center">
-                {/* 寄附ボタン */}
-                {import.meta.env.VITE_STRIPE_DONATION_LINK && (
-                  <a
-                    href={import.meta.env.VITE_STRIPE_DONATION_LINK}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
-                  >
-                    寄附で応援
-                  </a>
-                )}
 
                 {/* 認証エリア */}
                 {authUser ? (
@@ -3167,6 +3156,9 @@ ${instructionText}
         <button onClick={() => setShowTerms(true)} className="underline hover:text-gray-600 cursor-pointer">利用規約</button>
         <button onClick={() => setShowPrivacy(true)} className="underline hover:text-gray-600 cursor-pointer">プライバシーポリシー</button>
         <button onClick={() => setShowTokushoho(true)} className="underline hover:text-gray-600 cursor-pointer">特定商取引法に基づく表記</button>
+        {import.meta.env.VITE_STRIPE_DONATION_LINK && (
+          <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">寄附で応援</a>
+        )}
       </div>
 
       {/* 利用規約モーダル */}

@@ -21,6 +21,7 @@ jobs:
       - run: npm run build
         env:
           VITE_GOOGLE_CLIENT_ID: 378263784469-raptg25ha681me08ifr7mg14fgmfnltj.apps.googleusercontent.com
+          VITE_STRIPE_DONATION_LINK: https://donate.stripe.com/8x27sEbSz0BOdO5cbHeUU01
 
       - uses: cloudflare/wrangler-action@v3
         with:

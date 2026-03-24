@@ -902,28 +902,6 @@ export default {
       }
     }
 
-    // デバッグ: R2ファイルを直接取得
-    if (url.pathname === '/debug-r2') {
-      try {
-        const { lawId, articleTitle } = await request.json();
-        const r2Key = `large_law_articles_v2/${lawId}/${articleTitle}.json`;
-        const obj = await env.R2.get(r2Key);
-        if (!obj) {
-          return new Response(JSON.stringify({ r2Key, status: 'not_found' }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
-        // JSONとしてパースせず、テキストとして最初の200文字を返す
-        const text = await obj.text();
-        return new Response(JSON.stringify({ r2Key, status: 'ok', textLength: text.length, textPreview: text.slice(0, 200) }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message, stack: e.stack?.slice(0, 200) }), {
-          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-    }
 
     if (url.pathname === '/' || url.pathname === '/embed') {
       // GETリクエストの場合はステータスを返す
@@ -1443,42 +1421,8 @@ ${query}
         });
       } catch (error) {
         return new Response(JSON.stringify({
-          error: error.message,
-          stack: error.stack,
-          name: error.name
+          error: 'Internal server error'
         }), {
-          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // デバッグ: refs test endpoint
-    if (url.pathname === '/debug/refs-test') {
-      try {
-        const lawId = '417AC0000000086';
-        const r2Key = `refs/${lawId}.json`;
-        const refsObj = await env.R2.get(r2Key);
-
-        if (!refsObj) {
-          return new Response(JSON.stringify({ error: 'File not found', r2Key }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
-
-        const text = await refsObj.text();
-        const size = text.length;
-        const preview = text.substring(0, 200);
-        let isValid = false;
-        try {
-          JSON.parse(text);
-          isValid = true;
-        } catch (e) {}
-
-        return new Response(JSON.stringify({ size, preview, isValid }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
           status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }

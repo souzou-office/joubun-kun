@@ -23,8 +23,16 @@ jobs:
           VITE_GOOGLE_CLIENT_ID: 378263784469-raptg25ha681me08ifr7mg14fgmfnltj.apps.googleusercontent.com
           VITE_STRIPE_DONATION_LINK: https://buy.stripe.com/5kQ14g3m3ckwcK1a3zeUU02
 
-      - uses: cloudflare/wrangler-action@v3
+      - name: Deploy Pages (frontend)
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy dist --project-name=joubun-kun
+
+      - name: Deploy Worker (API)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

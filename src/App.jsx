@@ -1958,9 +1958,13 @@ ${articleContext}
           similarity: item.score
         }));
 
-        // 参照条文（オレンジ）を追加
+        // 参照条文（オレンジ）を追加（青で表示済みのものは除外）
+        const selectedKeysSet = new Set(displayArticles.map(d => `${d.lawData.law_title}_${d.article.title}`));
         const refArticles = Object.values(refArticlesData)
-          .filter(refArt => refArt.article?.paragraphs?.length > 0)
+          .filter(refArt => {
+            const key = `${refArt.law_title}_${refArt.article?.title}`;
+            return refArt.article?.paragraphs?.length > 0 && !selectedKeysSet.has(key);
+          })
           .map(refArt => ({
             article: refArt.article,
             lawData: { law_id: refArt.law_id, law_title: refArt.law_title },
@@ -2335,10 +2339,11 @@ ${instructionText}
         return mentionedInAnswer.has(key);
       });
 
-      // 参照条文のうち、説明で言及されたもののみ抽出
+      // 参照条文のうち、説明で言及されたもの（ただし青で表示済みのものは除外）
+      const selectedKeys = new Set(mentionedSelectedArticles.map(item => `${item.law.law_title}_${item.article.title}`));
       const mentionedRefArticles = Object.values(refArticlesData).filter(refArt => {
         const key = `${refArt.law_title}_${refArt.article?.title}`;
-        return mentionedInAnswer.has(key);
+        return mentionedInAnswer.has(key) && !selectedKeys.has(key);
       }).map(refArt => ({
         article: refArt.article,
         lawData: { law_title: refArt.law_title, law_id: refArt.law_id },

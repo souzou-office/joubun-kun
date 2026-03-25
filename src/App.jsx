@@ -2500,14 +2500,14 @@ ${instructionText}
           <div className="border-b border-gray-200 px-4 py-1">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <img src={logoA} alt="条文くん" className="h-14" />
+                <img src={logoA} alt="条文くん" className="h-10 sm:h-14" />
               </div>
               
               <div className="flex gap-2 items-center">
                 {/* 寄附ボタン */}
                 {import.meta.env.VITE_STRIPE_DONATION_LINK && (
                   <a href={import.meta.env.VITE_STRIPE_DONATION_LINK} target="_blank" rel="noopener noreferrer" className="inline-block hover:opacity-80 transition-opacity">
-                    <img src="/LOGOD.png" alt="寄付で応援" className="h-8" />
+                    <img src="/LOGOD.png" alt="寄付で応援" className="h-6 sm:h-8" />
                   </a>
                 )}
 
@@ -2563,15 +2563,14 @@ ${instructionText}
                       </div>
                     )}
                   </div>
-                ) : (
-                  <GoogleSignInButton size="medium" />
-                )}
+                ) : null}
 
                 <button
                   onClick={() => setShowSettings(true)}
-                  className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+                  className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-2 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors"
                 >
-                  ⚙️ 設定
+                  <span className="sm:hidden">⚙️</span>
+                  <span className="hidden sm:inline">⚙️ 設定</span>
                 </button>
               </div>
             </div>
@@ -2587,7 +2586,7 @@ ${instructionText}
                   <div className="flex-1 flex items-center justify-center py-12 px-4">
                     <div className="text-center max-w-md">
                       <div className="mb-6">
-                        <img src={logoA} alt="条文くん" className="w-48 mx-auto mb-4" />
+                        <img src={logoA} alt="条文くん" className="w-32 sm:w-48 mx-auto mb-4" />
                         <p className="text-gray-600 text-sm mb-1">AIを活用した法令検索サービス</p>
                         <p className="text-gray-500 text-xs">5回まで無料でお試しいただけます</p>
                       </div>

@@ -27,6 +27,9 @@
   "ai": {
     "binding": "AI"
   },
+  "vars": {
+    "GOOGLE_CLIENT_ID": "378263784469-raptg25ha681me08ifr7mg14fgmfnltj.apps.googleusercontent.com"
+  },
   "kv_namespaces": [
     {
       "binding": "SESSIONS",

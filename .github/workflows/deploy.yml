@@ -21,7 +21,7 @@ jobs:
       - run: npm run build
         env:
           VITE_GOOGLE_CLIENT_ID: 378263784469-raptg25ha681me08ifr7mg14fgmfnltj.apps.googleusercontent.com
-          VITE_STRIPE_DONATION_LINK: https://buy.stripe.com/5kQ14g3m3ckwcK1a3zeUU02
+          VITE_STRIPE_DONATION_LINK: https://donate.stripe.com/aFaeV609R84g8tLa3zeUU03
 
       - name: Deploy Pages (frontend)
         uses: cloudflare/wrangler-action@v3

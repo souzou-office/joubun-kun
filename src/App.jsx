@@ -103,7 +103,7 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
         const searchQuery = `${lawName} 第一条`;
         const searchResponse = await fetch(`${WORKER_URL}/search`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ queries: [searchQuery], originalQuery: searchQuery, topN: 1 })
         });
         if (searchResponse.ok) {
@@ -147,7 +147,7 @@ const fetchReferencedArticle = async (lawId, articleNum, lawName = null) => {
 
     const response = await fetch(`${WORKER_URL}/api/articles`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(requestBody)
     });
 
@@ -359,7 +359,7 @@ const classifyAndGenerateQueries = async (originalQuery, conversationHistory = [
 
     const response = await fetch(`${WORKER_URL}/api/classify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         query: originalQuery,
         previousSummary: previousSummary,
@@ -1642,7 +1642,7 @@ export default function App() {
   const callClaude = async (messages, system = '', maxTokens = 2000) => {
     const response = await fetch(`${WORKER_URL}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ messages, system })
     });
 
@@ -1666,7 +1666,7 @@ export default function App() {
   const callClaudeStream = async (messages, system = '', onChunk) => {
     const response = await fetch(`${WORKER_URL}/api/chat-stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ messages, system })
     });
 
@@ -1786,7 +1786,7 @@ export default function App() {
 
       const searchResponse = await fetch(`${WORKER_URL}/search`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           queries: searchQueries,  // マルチクエリ配列を送信
           originalQuery: actualQuery,    // 元のクエリも送信（条番号抽出用）
@@ -1893,7 +1893,7 @@ ${articleContext}
           try {
             const refsResponse = await fetch(`${WORKER_URL}/api/refs`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
               body: JSON.stringify({
                 articles: selectedArticles.map(item => ({
                   law_id: item.law.law_id,
@@ -1935,7 +1935,7 @@ ${articleContext}
           try {
             const articlesResponse = await fetch(`${WORKER_URL}/api/articles`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
               body: JSON.stringify({ articleIds: [...refTargets] })
             });
             if (articlesResponse.ok) {
@@ -1994,7 +1994,7 @@ ${articleContext}
         try {
           const refsResponse = await fetch(`${WORKER_URL}/api/refs`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({
               articles: selectedArticles.map(item => ({
                 law_id: item.law.law_id,
@@ -2031,7 +2031,7 @@ ${articleContext}
         try {
           const articlesResponse = await fetch(`${WORKER_URL}/api/articles`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ articleIds: [...refTargets] })
           });
           if (articlesResponse.ok) {

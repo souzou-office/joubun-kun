@@ -494,6 +494,11 @@ export default {
 
     if (url.pathname === '/search') {
       try {
+        if (!isBypassKey(request) && !(await getAuthUser(request))) {
+          return new Response(JSON.stringify({ error: '認証が必要です' }), {
+            status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         const timings = {};
         const startTotal = Date.now();
 
@@ -926,6 +931,11 @@ export default {
     // クエリ分類API（Claude経由）
     if (url.pathname === '/api/classify') {
       try {
+        if (!isBypassKey(request) && !(await getAuthUser(request))) {
+          return new Response(JSON.stringify({ error: '認証が必要です' }), {
+            status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         const startTime = Date.now();
         const { query, previousSummary, conversationHistory } = await request.json();
         const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
@@ -1017,6 +1027,11 @@ ${query}
     // チャットAPI（Claude経由）
     if (url.pathname === '/api/chat') {
       try {
+        if (!isBypassKey(request) && !(await getAuthUser(request))) {
+          return new Response(JSON.stringify({ error: '認証が必要です' }), {
+            status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         const startTime = Date.now();
         const { messages, system } = await request.json();
         const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
@@ -1061,6 +1076,11 @@ ${query}
     // ストリーミングチャットAPI（Claude経由）
     if (url.pathname === '/api/chat-stream') {
       try {
+        if (!isBypassKey(request) && !(await getAuthUser(request))) {
+          return new Response(JSON.stringify({ error: '認証が必要です' }), {
+            status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         const { messages, system } = await request.json();
         const CLAUDE_API_KEY = env.CLAUDE_API_KEY;
 
@@ -1112,6 +1132,11 @@ ${query}
     // 条文取得API（条文IDから条文内容を取得）
     if (url.pathname === '/api/articles') {
       try {
+        if (!isBypassKey(request) && !(await getAuthUser(request))) {
+          return new Response(JSON.stringify({ error: '認証が必要です' }), {
+            status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         const { articleIds } = await request.json();
         // articleIds: ["417AC0000000086_Art453", "129AC0000000089_Art415", ...]
 
@@ -1314,6 +1339,11 @@ ${query}
     // 参照条文API（refs/reverse_refs取得）
     if (url.pathname === '/api/refs') {
       try {
+        if (!isBypassKey(request) && !(await getAuthUser(request))) {
+          return new Response(JSON.stringify({ error: '認証が必要です' }), {
+            status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         const { articles } = await request.json();
         // articles: [{ law_id, article_title }, ...]
 

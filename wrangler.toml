@@ -16,3 +16,8 @@ index_name = "law-embeddings"
 binding = "R2"
 bucket_name = "joubun-kun-data"
 preview_bucket_name = "joubun-kun-data"
+
+# API_KEYS KV namespace (wrangler kv namespace create API_KEYS で作成後IDを設定)
+# [[kv_namespaces]]
+# binding = "API_KEYS"
+# id = "TODO_SET_KV_ID"
